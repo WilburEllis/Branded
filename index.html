@@ -23,23 +23,23 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
-
+ 
 // ═══ SUPABASE CLIENT ═══
 const SUPABASE_URL = "https://gumpxdchfqatszeuldvm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bXB4ZGNoZnFhdHN6ZXVsZHZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5OTYyNzcsImV4cCI6MjA4ODU3MjI3N30.AtMh0jDDKctXupluF5fqThMb58xOUjlNoy1RTcwmxRQ";
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-
+ 
 // ═══ STYLES ═══
 const S = {
   bg: "#0f1410", card: "#171e18", border: "#2a3a2c", green: "#4caf6a", greenDim: "#2d6b3f",
   amber: "#e8a230", blue: "#5b9bd5", purple: "#b07de8", text: "#d4e0d5", muted: "#6b8a6e",
   tag: "#1e2e1f", headerBg: "#141e15", inputBg: "#0d150e"
 };
-
+ 
 // ═══ UTILITIES ═══
 function fmt(v) { if (v === null || v === undefined || typeof v !== "number") return "—"; return "$" + v.toFixed(v < 2 ? 3 : 2); }
 function fmtAc(v) { return "$" + v.toFixed(2) + "/ac"; }
-
+ 
 function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice) {
   if (!price || rateMin == null || !rateUnit) return null;
   const u = rateUnit.toLowerCase(); const per100 = u.indexOf("/100") !== -1;
@@ -50,7 +50,7 @@ function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice) {
   if (per100) return { val: (sprayVol / 100) * (price / upg) * rateMin, per100: true };
   return { val: (price / upg) * rateMin, per100: false };
 }
-
+ 
 function calcNTreatPPA(pricePerGal, rateQtPerTon, uanGalPerAcre) {
   if (!pricePerGal || !rateQtPerTon) return null;
   return (uanGalPerAcre * (rateQtPerTon / 4) * pricePerGal) / 180;
@@ -59,7 +59,7 @@ function calcUreaPPA(pricePerGal, rateQtPerTon, lbsUreaPerAcre) {
   if (!pricePerGal || !rateQtPerTon) return null;
   return lbsUreaPerAcre * (rateQtPerTon / 4) / 2000 * pricePerGal;
 }
-
+ 
 function resolvePrice(p, district, location, overridesMap) {
   if (location && overridesMap) {
     const key = p.item + ":" + location;
@@ -71,12 +71,12 @@ function resolvePrice(p, district, location, overridesMap) {
   if (district === "wtx") return { floor: p.w_floor, target: p.w_target, label: "West TX", isOverride: false };
   return { floor: p.e_floor, target: p.e_target, label: "East TX", isOverride: false };
 }
-
+ 
 function hasDistrictPrice(p, district, location, overridesMap) {
   const r = resolvePrice(p, district, location, overridesMap);
   return r.target != null || r.floor != null;
 }
-
+ 
 // ═══ ERROR SCREEN ═══
 function ErrorScreen({ error, onRetry }) {
   return (
@@ -92,7 +92,7 @@ function ErrorScreen({ error, onRetry }) {
     </div>
   );
 }
-
+ 
 // ═══ LOADING SCREEN ═══
 function LoadingScreen() {
   return (
@@ -106,7 +106,7 @@ function LoadingScreen() {
     </div>
   );
 }
-
+ 
 // ═══ LOGIN SCREEN ═══
 function LoginScreen({ onLogin, error, loading }) {
   const [un, setUn] = useState("");
@@ -132,7 +132,7 @@ function LoginScreen({ onLogin, error, loading }) {
     </div>
   );
 }
-
+ 
 // ═══ PRODUCT INFO MODAL ═══
 function InfoModal({ name, productInfo, onClose }) {
   const info = productInfo[name];
@@ -158,14 +158,13 @@ function InfoModal({ name, productInfo, onClose }) {
     </div>
   );
 }
-
+ 
 // ═══ PRODUCT CARD ═══
 function ProductCard({ p, district, location, isNational, isAdmin, isManager, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls }) {
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
-  const [useFloor, setUseFloor] = useState(false);
   const isOrg = organicNames.has(p.name);
-
+ 
   // ── ADMIN TX CARD ──
   if (isAdmin && !isNational) {
     const cells = [];
@@ -179,7 +178,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
     }
     const labelUrl = labelUrls[p.name];
     const rateStr = p.rate_min != null && p.rate_unit ? (p.rate_min === p.rate_max ? p.rate_min + " " + p.rate_unit : p.rate_min + "-" + p.rate_max + " " + p.rate_unit) : null;
-
+ 
     return (<React.Fragment>
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
         <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
@@ -222,7 +221,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
       {showInfo && <InfoModal name={p.name} productInfo={productInfo} onClose={() => setShowInfo(false)} />}
     </React.Fragment>);
   }
-
+ 
   // ── ADMIN NATIONAL CARD ──
   if (isAdmin && isNational) {
     return (<React.Fragment>
@@ -265,37 +264,104 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
       {showInfo && <InfoModal name={p.name} productInfo={productInfo} onClose={() => setShowInfo(false)} />}
     </React.Fragment>);
   }
-
+ 
   // ── SALES / MANAGER CARD ──
-  let target, floor, label, accentColor;
+  const [priceMode, setPriceMode] = useState("target");
+  let target, floor, label, accentColor, locOverride, hasLocOverride;
   if (isNational) {
     target = p.nat_target; floor = target != null ? Math.round(target * 0.95 * 100) / 100 : null;
-    label = "National"; accentColor = "#9ab8a0";
+    label = "National"; accentColor = "#9ab8a0"; locOverride = null; hasLocOverride = false;
   } else {
-    const pr = resolvePrice(p, district, location, overridesMap);
-    target = pr.target; floor = pr.floor; label = pr.label;
-    accentColor = pr.isOverride ? S.amber : district === "wtx" ? S.amber : S.green;
+    // Check for location override first (for single-location sales reps)
+    locOverride = null; hasLocOverride = false;
+    if (location && overridesMap && !isManager) {
+      const key = p.item + ":" + location;
+      const ov = overridesMap[key];
+      if (ov && (ov.floor_price != null || ov.target_price != null)) {
+        locOverride = { target: ov.target_price, floor: ov.floor_price, locName: ov.location_name || location };
+        hasLocOverride = true;
+      }
+    }
+    // If location override exists for sales rep, USE it as the main price
+    if (hasLocOverride) {
+      target = locOverride.target; floor = locOverride.floor;
+      const loc = allLocations.find(l => l.id === location);
+      label = loc?.name || location;
+      accentColor = S.blue;
+    } else if (district === "wtx") {
+      target = p.w_target; floor = p.w_floor; label = "West TX";
+      accentColor = S.amber;
+    } else {
+      target = p.e_target; floor = p.e_floor; label = "East TX";
+      accentColor = S.green;
+    }
   }
-  const activePrice = useFloor ? floor : target;
+ 
+  // Determine active price based on mode
+  let activePrice, activePriceLabel;
+  if ((priceMode.startsWith("loc:") || priceMode.startsWith("loc_floor:")) && isManager && overridesMap) {
+    // Manager clicked a location override
+    const isLocFloor = priceMode.startsWith("loc_floor:");
+    const lid = priceMode.split(":")[1];
+    const key = p.item + ":" + lid;
+    const ov = overridesMap[key];
+    if (ov) {
+      activePrice = isLocFloor ? (ov.floor_price || ov.target_price) : (ov.target_price || ov.floor_price);
+      const loc = allLocations.find(l => l.id === lid);
+      activePriceLabel = (loc?.name || lid) + (isLocFloor ? " Floor" : " Target");
+    } else {
+      activePrice = target; activePriceLabel = "Target";
+    }
+  } else if (priceMode === "floor") {
+    activePrice = floor;
+    activePriceLabel = "Floor";
+  } else {
+    activePrice = target;
+    activePriceLabel = "Target";
+  }
+ 
+  // Wholesale for Lonestar reps
+  const isLonestar = !isNational && location === "ls";
+  const wholesale = isLonestar ? p.wholesale : null;
+ 
   const labelUrl = labelUrls[p.name];
   const rateStr = p.rate_min != null && p.rate_unit ? (p.rate_min === p.rate_max ? p.rate_min + " " + p.rate_unit : p.rate_min + "-" + p.rate_max + " " + p.rate_unit) : null;
   const rateNote = p.rate_note;
-
+ 
   let ppaSection = null;
   if (activePrice && p.rate_min != null && p.rate_unit) {
-    const isNTreat = p.name && /^N-Treat/i.test(p.name);
-    if (isNTreat) {
-      const uan = calcNTreatPPA(activePrice, p.rate_min, 30);
-      const urea = calcUreaPPA(activePrice, p.rate_min, 200);
-      ppaSection = (uan || urea) ? (
-        <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>💰 Cost Per Acre</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {uan && <div><div style={{ fontSize: 9, color: S.muted }}>UAN 32% (30 gal/ac)</div><div style={{ fontSize: 14, fontWeight: 700, color: S.green, marginTop: 2 }}>{fmtAc(uan)}</div></div>}
-            {urea && <div><div style={{ fontSize: 9, color: S.muted }}>Urea (200 lbs/ac)</div><div style={{ fontSize: 14, fontWeight: 700, color: S.green, marginTop: 2 }}>{fmtAc(urea)}</div></div>}
+    const isNTreatProduct = p.n_treatment === true || p.n_treatment === "true";
+    if (isNTreatProduct) {
+      const lowRate = p.n_treat_low_rate || p.rate_min;
+      const ureaRate = p.n_treat_urea_rate;
+      const uanVols = [10, 15, 20, 25, 30];
+      const ureaLbs = [100, 150, 200];
+      ppaSection = (
+        <div style={{ background: "rgba(91,155,213,.08)", border: "1px solid rgba(91,155,213,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
+          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ {lowRate} qt/tn UAN ({activePriceLabel})</div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+            <span style={{ flex: 1, fontSize: 9, color: S.muted }}>GAL/AC</span>
+            {uanVols.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}
           </div>
+          <div style={{ display: "flex", gap: 4 }}>
+            <span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>
+            {uanVols.map(v => { const ppa = calcNTreatPPA(activePrice, lowRate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{ppa != null ? fmtAc(ppa) : "—"}</span>; })}
+          </div>
+          {ureaRate && (
+            <React.Fragment>
+              <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {ureaRate} qt/tn</div>
+              <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                <span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>
+                {ureaLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>
+                {ureaLbs.map(v => { const ppa = calcUreaPPA(activePrice, ureaRate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{ppa != null ? fmtAc(ppa) : "—"}</span>; })}
+              </div>
+            </React.Fragment>
+          )}
         </div>
-      ) : null;
+      );
     } else {
       const ppa = calcPPA(p.pkg, activePrice, p.rate_min, p.rate_unit, 20, p.dry_oz_price);
       if (ppa) {
@@ -303,15 +369,15 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
           <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
             <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? " (20 GPA)" : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: S.green }}>{fmtAc(ppa.val)}</div>
-            <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ {p.rate_min} {p.rate_unit} · {useFloor ? "Floor" : "Target"}</div>
+            <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ {p.rate_min} {p.rate_unit} · {activePriceLabel}</div>
           </div>
         );
       }
     }
   }
-
+ 
   const showManagerCompare = isManager && !isNational && locationIds && locationIds.length > 1;
-
+ 
   return (<React.Fragment>
     <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
       <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
@@ -323,38 +389,84 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
           <span style={{ fontSize: 15, color: S.muted, transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>⌄</span>
         </div>
       </div>
-
+ 
       {showManagerCompare ? (() => {
-        const prices = locationIds.map(lid => {
-          const pr = resolvePrice(p, district, lid, overridesMap);
-          const loc = allLocations.find(l => l.id === lid);
-          return { ...pr, locName: loc?.name || lid };
-        });
+        // District prices first
+        const distPr = district === "wtx" 
+          ? { target: p.w_target, floor: p.w_floor, label: "West TX" }
+          : { target: p.e_target, floor: p.e_floor, label: "East TX" };
+        // Find location overrides for this manager's locations
+        const mgrLocOverrides = locationIds.map(lid => {
+          const key = p.item + ":" + lid;
+          const ov = overridesMap[key];
+          if (ov && (ov.floor_price != null || ov.target_price != null)) {
+            const loc = allLocations.find(l => l.id === lid);
+            return { lid, locName: loc?.name || lid, target: ov.target_price, floor: ov.floor_price };
+          }
+          return null;
+        }).filter(Boolean);
+ 
         return (
           <div style={{ margin: "0 12px 10px" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(" + prices.length + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
-              {prices.map(pr => (
-                <div key={pr.locName} style={{ background: "#131c14", padding: "6px 8px" }}>
-                  <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{pr.locName}{pr.isOverride ? " ★" : ""}</div>
-                  <div style={{ fontSize: 17, fontWeight: 700, color: pr.isOverride ? S.blue : accentColor }}>{fmt(useFloor ? pr.floor : pr.target)}</div>
-                </div>
-              ))}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
+              <div onClick={() => setPriceMode("target")} style={{ background: priceMode === "target" ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "target" ? "3px solid " + S.green : "3px solid transparent" }}>
+                <div style={{ fontSize: 8, color: priceMode === "target" ? S.green : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{distPr.label} Target{priceMode === "target" ? " ✓" : ""}</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: S.green }}>{fmt(distPr.target)}</div>
+              </div>
+              <div onClick={() => setPriceMode("floor")} style={{ background: priceMode === "floor" ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "floor" ? "3px solid " + S.amber : "3px solid transparent" }}>
+                <div style={{ fontSize: 8, color: priceMode === "floor" ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{distPr.label} Floor{priceMode === "floor" ? " ✓" : ""}</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: S.amber }}>{fmt(distPr.floor)}</div>
+              </div>
             </div>
+            {mgrLocOverrides.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(mgrLocOverrides.length * 2, 4) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 4 }}>
+                {mgrLocOverrides.map(ov => {
+                  const locKey = "loc:" + ov.lid;
+                  const locFloorKey = "loc_floor:" + ov.lid;
+                  const isTargetActive = priceMode === locKey;
+                  const isFloorActive = priceMode === locFloorKey;
+                  const isEitherActive = isTargetActive || isFloorActive;
+                  return (
+                    <React.Fragment key={ov.locName}>
+                      <div onClick={() => setPriceMode(isTargetActive ? "target" : locKey)} style={{ background: isTargetActive ? "#141e1e" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isTargetActive ? "3px solid " + S.blue : "3px solid transparent" }}>
+                        <div style={{ fontSize: 8, color: isTargetActive ? S.blue : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{ov.locName} Target{isTargetActive ? " ✓" : ""}</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: S.blue }}>{fmt(ov.target)}</div>
+                      </div>
+                      <div onClick={() => setPriceMode(isFloorActive ? "target" : locFloorKey)} style={{ background: isFloorActive ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isFloorActive ? "3px solid " + S.amber : "3px solid transparent" }}>
+                        <div style={{ fontSize: 8, color: isFloorActive ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{ov.locName} Floor{isFloorActive ? " ✓" : ""}</div>
+                        <div style={{ fontSize: 17, fontWeight: 700, color: S.blue }}>{fmt(ov.floor)}</div>
+                      </div>
+                    </React.Fragment>
+                  );
+                })}
+              </div>
+            )}
           </div>
         );
       })() : (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
-          <div onClick={() => setUseFloor(false)} style={{ background: !useFloor ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: !useFloor ? "3px solid " + S.green : "3px solid transparent" }}>
-            <div style={{ fontSize: 8, color: !useFloor ? S.green : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Target{!useFloor ? " ✓" : ""}</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: S.green }}>{fmt(target)}</div>
+        <div style={{ margin: "0 12px 10px" }}>
+          {hasLocOverride && <div style={{ fontSize: 8, color: S.blue, textTransform: "uppercase", letterSpacing: 1, padding: "4px 8px 2px", fontWeight: 700 }}>★ {label} Location Pricing</div>}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
+            <div onClick={() => setPriceMode("target")} style={{ background: priceMode === "target" ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "target" ? "3px solid " + accentColor : "3px solid transparent" }}>
+              <div style={{ fontSize: 8, color: priceMode === "target" ? accentColor : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Target{priceMode === "target" ? " ✓" : ""}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: accentColor }}>{fmt(target)}</div>
+            </div>
+            <div onClick={() => setPriceMode("floor")} style={{ background: priceMode === "floor" ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "floor" ? "3px solid " + S.amber : "3px solid transparent" }}>
+              <div style={{ fontSize: 8, color: priceMode === "floor" ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Floor{priceMode === "floor" ? " ✓" : ""}</div>
+              <div style={{ fontSize: 17, fontWeight: 700, color: S.amber }}>{fmt(floor)}</div>
+            </div>
           </div>
-          <div onClick={() => setUseFloor(true)} style={{ background: useFloor ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: useFloor ? "3px solid " + S.amber : "3px solid transparent" }}>
-            <div style={{ fontSize: 8, color: useFloor ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Floor{useFloor ? " ✓" : ""}</div>
-            <div style={{ fontSize: 17, fontWeight: 700, color: S.amber }}>{fmt(floor)}</div>
-          </div>
+          {wholesale != null && wholesale > 0 && (
+            <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 4 }}>
+              <div style={{ background: "#131c14", padding: "6px 8px" }}>
+                <div style={{ fontSize: 8, color: S.purple, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Wholesale</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: S.purple }}>{fmt(wholesale)}</div>
+              </div>
+            </div>
+          )}
         </div>
       )}
-
+ 
       {open && (
         <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
           {ppaSection}
@@ -370,8 +482,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
     {showInfo && <InfoModal name={p.name} productInfo={productInfo} onClose={() => setShowInfo(false)} />}
   </React.Fragment>);
 }
-
-
+ 
+ 
 // ═══ MAIN APP ═══
 function App() {
   const [session, setSession] = useState(null);
@@ -380,7 +492,7 @@ function App() {
   const [loginLoading, setLoginLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [connError, setConnError] = useState(null);
-
+ 
   const [txData, setTxData] = useState([]);
   const [natData, setNatData] = useState([]);
   const [overridesMap, setOverridesMap] = useState({});
@@ -388,12 +500,12 @@ function App() {
   const [organicNames, setOrganicNames] = useState(new Set());
   const [productInfo, setProductInfo] = useState({});
   const [labelUrls, setLabelUrls] = useState({});
-
+ 
   const [search, setSearch] = useState("");
   const [view, setView] = useState("tx");
   const [catFilter, setCatFilter] = useState("ALL");
   const searchRef = useRef(null);
-
+ 
   useEffect(() => {
     let subscription;
     async function init() {
@@ -415,7 +527,7 @@ function App() {
     init();
     return () => { if (subscription) subscription.unsubscribe(); };
   }, []);
-
+ 
   useEffect(() => {
     if (!session) return;
     async function loadAll() {
@@ -428,34 +540,34 @@ function App() {
           return;
         }
         setProfile(prof);
-
+ 
         const { data: tx } = await supabase.from("v_tx_pricing").select("*").order("name");
         setTxData(tx || []);
-
+ 
         const { data: nat } = await supabase.from("national_prices").select("*").order("name");
         setNatData(nat || []);
-
+ 
         const { data: overrides } = await supabase.from("v_location_overrides").select("*");
         const oMap = {};
         (overrides || []).forEach(o => { oMap[o.item + ":" + o.location_id] = o; });
         setOverridesMap(oMap);
-
+ 
         const { data: locs } = await supabase.from("locations").select("*");
         setLocations(locs || []);
-
+ 
         const { data: orgSkus } = await supabase.from("skus").select("name").eq("is_organic", true);
         setOrganicNames(new Set((orgSkus || []).map(s => s.name)));
-
+ 
         const { data: pi } = await supabase.from("product_info").select("*");
         const piMap = {};
         (pi || []).forEach(p => { piMap[p.name] = p; });
         setProductInfo(piMap);
-
+ 
         const { data: lu } = await supabase.from("label_urls").select("*");
         const luMap = {};
         (lu || []).forEach(l => { luMap[l.name] = l.url; });
         setLabelUrls(luMap);
-
+ 
         setView(prof?.role === "admin" ? "tx" : "district");
       } catch (err) {
         console.error("Load error:", err);
@@ -465,7 +577,7 @@ function App() {
     }
     loadAll();
   }, [session]);
-
+ 
   const handleLogin = useCallback(async (email, password) => {
     setLoginLoading(true);
     setLoginError("");
@@ -477,44 +589,44 @@ function App() {
     }
     setLoginLoading(false);
   }, []);
-
+ 
   const handleLogout = useCallback(async () => {
     await supabase.auth.signOut();
     setSession(null); setProfile(null);
     setSearch(""); setCatFilter("ALL"); setView("tx");
   }, []);
-
+ 
   const txCats = useMemo(() => {
     const cats = [...new Set(txData.map(p => p.cat).filter(Boolean))].sort();
     return ["ALL", ...cats];
   }, [txData]);
-
+ 
   const natAlpha = ["ALL", "A-F", "G-L", "M-R", "S-Z"];
-
+ 
   const districtProducts = useMemo(() => {
     if (!profile || profile.role === "admin") return [];
     const dist = profile.district;
     const loc = profile.location_ids?.[0] || null;
     return txData.filter(p => hasDistrictPrice(p, dist, loc, overridesMap));
   }, [profile, txData, overridesMap]);
-
+ 
   const districtCats = useMemo(() => {
     const cats = [...new Set(districtProducts.map(p => p.cat).filter(Boolean))].sort();
     return ["ALL", ...cats];
   }, [districtProducts]);
-
+ 
   const natOnlyProducts = useMemo(() => {
     if (!profile || profile.role === "admin") return [];
     const txItems = new Set(districtProducts.map(p => p.item));
     return natData.filter(p => !txItems.has(p.item) && p.nat_target != null);
   }, [profile, districtProducts, natData]);
-
+ 
   const organicDistrict = useMemo(() => districtProducts.filter(p => organicNames.has(p.name)), [districtProducts, organicNames]);
   const organicNatOnly = useMemo(() => {
     const distNames = new Set(organicDistrict.map(p => p.name));
     return natOnlyProducts.filter(p => organicNames.has(p.name) && !distNames.has(p.name));
   }, [organicDistrict, natOnlyProducts, organicNames]);
-
+ 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     const isAdmin = profile?.role === "admin";
@@ -551,24 +663,24 @@ function App() {
     }
     return [];
   }, [profile, view, catFilter, search, txData, natData, districtProducts, natOnlyProducts, organicDistrict, organicNatOnly, organicNames]);
-
+ 
   const groupByName = (arr) => {
     const g = {}; arr.forEach(p => { if (!g[p.name]) g[p.name] = []; g[p.name].push(p); });
     return Object.entries(g).sort((a, b) => a[0].localeCompare(b[0]));
   };
-
+ 
   if (connError) return <ErrorScreen error={connError} onRetry={() => window.location.reload()} />;
   if (initialLoading) return <LoadingScreen />;
   if (!session) return <LoginScreen onLogin={handleLogin} error={loginError} loading={loginLoading} />;
   if (!profile) return <LoadingScreen />;
-
+ 
   const isAdmin = profile.role === "admin";
   const dist = profile.district;
   const loc = profile.location_ids?.[0] || null;
   const locIds = profile.location_ids || [];
   const isManager = locIds.length > 1;
   const districtLabel = isManager ? (dist === "wtx" ? "West TX Manager" : "East TX Manager") : loc ? (locations.find(l => l.id === loc)?.name || dist) : dist === "wtx" ? "West Texas" : "East Texas";
-
+ 
   const tabs = isAdmin ? [
     { key: "tx", label: "TX Products" }, { key: "nat", label: "National Ref" },
     { key: "all", label: "All" }, { key: "organic", label: "◆ Organic", color: "#4ade80" },
@@ -576,16 +688,16 @@ function App() {
     { key: "district", label: districtLabel + " Products" }, { key: "national", label: "National Ref" },
     { key: "organic", label: "◆ Organic", color: "#4ade80" },
   ];
-
+ 
   const pills = isAdmin
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
-
+ 
   const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations };
-
+ 
   let content = null;
   let countText = "";
-
+ 
   if (isAdmin) {
     if (view === "tx") {
       const groups = groupByName(filtered);
@@ -634,7 +746,7 @@ function App() {
       </React.Fragment>);
     }
   }
-
+ 
   return (
     <div style={{ minHeight: "100vh", background: S.bg, color: S.text, fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
       <header style={{ background: S.headerBg, borderBottom: "2px solid " + S.greenDim, padding: "12px 14px 8px", position: "sticky", top: 0, zIndex: 100 }}>
@@ -664,7 +776,7 @@ function App() {
           </div>
         </div>
       </header>
-
+ 
       {!(isAdmin && view === "all") && (
         <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "8px 14px 2px", scrollbarWidth: "none" }}>
           {pills.map(c => (
@@ -675,7 +787,7 @@ function App() {
           ))}
         </div>
       )}
-
+ 
       <div style={{ padding: "6px 12px 80px" }}>
         <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "5px 0 6px" }}>{countText}</div>
         {content}
@@ -683,8 +795,9 @@ function App() {
     </div>
   );
 }
-
+ 
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
 </script>
 </body>
 </html>
+ 
