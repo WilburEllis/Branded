@@ -152,7 +152,7 @@ function InfoModal({ name, productInfo, onClose }) {
             {benefits.map((b, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: S.text, padding: "4px 0", borderBottom: i < benefits.length - 1 ? "1px solid " + S.border : "none", lineHeight: 1.4 }}><span style={{ color: S.green, fontWeight: 800, flexShrink: 0 }}>✓</span>{b}</div>)}
           </div>}
           {info.crops && <div style={{ marginBottom: 14 }}><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 6 }}>Crops / Uses</div><div style={{ fontSize: 12, color: S.text, background: S.bg, borderRadius: 6, padding: "7px 10px" }}>🌿 {info.crops}</div></div>}
-          {info.trial && <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 6 }}>Trial Data</div><div style={{ fontSize: 12, color: S.amber, background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.2)", borderRadius: 6, padding: "8px 10px", lineHeight: 1.4 }}>📈 {info.trial}</div></div>}
+          {info.trial && <div><div style={{ fontSize: 9, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 6 }}>Trial Data</div><div style={{ fontSize: 12, color: S.amber, background: "rgba(245,158,11,.08)", border: "1px solid rgba(245,158,11,.2)", borderRadius: 6, padding: "8px 10px", lineHeight: 1.6 }}>📈 {info.trial.split(/(https?:\/\/[^\s|]+)/g).map((part, i) => part.match(/^https?:\/\//) ? <a key={i} href={part} target="_blank" rel="noopener" style={{ color: S.green, textDecoration: "underline", wordBreak: "break-all" }}>{part}</a> : part)}</div></div>}
         </div>
       </div>
     </div>
@@ -166,18 +166,91 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
   const [useFloor, setUseFloor] = useState(false);
   const isOrg = organicNames.has(p.name);
 
+  // ── Shared PPA renderer ──
+  function renderPPA(price, priceLabel) {
+    if (!price || p.rate_min == null || !p.rate_unit) return null;
+    const isNTP = p.n_treatment === true || p.n_treatment === "true";
+    if (isNTP) {
+      const lr = p.n_treat_low_rate || p.rate_min;
+      const ur = p.n_treat_urea_rate;
+      const nh3Rate = p.rate_note && p.rate_note.match(/Anhydrous\s+(\d+)/i) ? parseInt(p.rate_note.match(/Anhydrous\s+(\d+)/i)[1]) : null;
+      const uanV = [10, 15, 20, 25, 30];
+      const dryLbs = [50, 100, 150, 200];
+      return (
+        <div style={{ background: "rgba(91,155,213,.08)", border: "1px solid rgba(91,155,213,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
+          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ {lr} qt/tn UAN ({priceLabel})</div>
+          <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>GAL/AC</span>{uanV.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
+          <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{uanV.map(v => { const r = calcNTreatPPA(price, lr, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+          {ur && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {ur} qt/tn</div>
+            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, ur, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+          </React.Fragment>)}
+          {nh3Rate && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ {nh3Rate} qt/tn</div>
+            <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, nh3Rate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+          </React.Fragment>)}
+        </div>
+      );
+    } else {
+      const ppa = calcPPA(p.pkg, price, p.rate_min, p.rate_unit, 20, p.dry_oz_price);
+      if (!ppa) return null;
+      return (
+        <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
+          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? " (20 GPA)" : ""} — {priceLabel}</div>
+          <div style={{ fontSize: 16, fontWeight: 700, color: S.green }}>{fmtAc(ppa.val)}</div>
+          <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ {p.rate_min} {p.rate_unit}</div>
+        </div>
+      );
+    }
+  }
+
+  // ── Shared price cell renderer ──
+  function PriceCell({ k, l, v, c, sel, onSel, showMargin }) {
+    const isActive = sel === k;
+    const cost = p.cost;
+    const mg = showMargin && cost != null && v != null && v > 0 ? ((v - cost) / v * 100).toFixed(1) + "%" : null;
+    return (
+      <div onClick={e => { e.stopPropagation(); onSel(k); }} style={{ background: isActive ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isActive ? "3px solid " + c : "3px solid transparent" }}>
+        <div style={{ fontSize: 8, color: isActive ? c : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{l}{isActive ? " ✓" : ""}</div>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: c }}>{fmt(v)}</div>
+          {mg && <div style={{ fontSize: 9, color: S.muted, fontWeight: 600 }}>{mg}</div>}
+        </div>
+      </div>
+    );
+  }
+
   // ── ADMIN TX CARD ──
   if (isAdmin && !isNational) {
-    const cells = [];
-    if (p.w_target != null) cells.push({ l: "W TX Target", v: p.w_target, c: S.amber });
-    if (p.e_target != null) cells.push({ l: "E TX Target", v: p.e_target, c: S.green });
+    // Collapsed: district targets + location targets
+    const collapsedCells = [];
+    if (p.w_target != null) collapsedCells.push({ k: "w_target", l: "W TX Target", v: p.w_target, c: S.amber });
+    if (p.e_target != null) collapsedCells.push({ k: "e_target", l: "E TX Target", v: p.e_target, c: S.green });
     if (overridesMap) {
-      const rhKey = p.item + ":rh";
-      const lsKey = p.item + ":ls";
-      if (overridesMap[rhKey]) cells.push({ l: "Rio Hondo", v: useFloor ? overridesMap[rhKey].floor_price : overridesMap[rhKey].target_price, c: S.blue });
-      if (overridesMap[lsKey]) cells.push({ l: "Lonestar", v: useFloor ? overridesMap[lsKey].floor_price : overridesMap[lsKey].target_price, c: S.blue });
+      const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
+      if (overridesMap[rhKey]?.target_price != null) collapsedCells.push({ k: "rh_t", l: "Rio Hondo", v: overridesMap[rhKey].target_price, c: S.blue });
+      if (overridesMap[lsKey]?.target_price != null) collapsedCells.push({ k: "ls_t", l: "Lonestar", v: overridesMap[lsKey].target_price, c: S.blue });
     }
-    const labelUrl = labelUrls[p.name];
+    // Expanded: cost, wholesale, floor prices
+    const expandedCells = [];
+    if (p.w_floor != null) expandedCells.push({ k: "w_floor", l: "W TX Floor", v: p.w_floor, c: S.amber });
+    if (p.e_floor != null) expandedCells.push({ k: "e_floor", l: "E TX Floor", v: p.e_floor, c: S.green });
+    if (overridesMap) {
+      const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
+      if (overridesMap[rhKey]?.floor_price != null) expandedCells.push({ k: "rh_f", l: "Rio Hondo Floor", v: overridesMap[rhKey].floor_price, c: S.blue });
+      if (overridesMap[lsKey]?.floor_price != null) expandedCells.push({ k: "ls_f", l: "Lonestar Floor", v: overridesMap[lsKey].floor_price, c: S.blue });
+    }
+    // Wholesale as clickable price cell
+    const wsCells = [];
+    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: p.wholesale, c: S.purple });
+
+    const adminSel = useFloor || (collapsedCells[0]?.k || "w_target");
+    const allAdminCells = [...collapsedCells, ...expandedCells, ...wsCells];
+    const selCell = allAdminCells.find(c => c.k === adminSel) || allAdminCells[0];
+    const adminPrice = selCell?.v;
+    const adminPriceLabel = selCell?.l || "Target";
     const rateStr = p.rate_min != null && p.rate_unit ? (p.rate_min === p.rate_max ? p.rate_min + " " + p.rate_unit : p.rate_min + "-" + p.rate_max + " " + p.rate_unit) : null;
 
     return (<React.Fragment>
@@ -191,28 +264,29 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
             <span style={{ fontSize: 15, color: S.muted, transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>⌄</span>
           </div>
         </div>
-        {cells.length > 0 && (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(cells.length, 2) + ",1fr)", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
-            {cells.map(c => (
-              <div key={c.l} style={{ background: "#131c14", padding: "6px 8px" }}>
-                <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{c.l}</div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: c.c }}>{fmt(c.v)}</div>
-              </div>
-            ))}
+        {collapsedCells.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(collapsedCells.length, 2) + ",1fr)", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
+            {collapsedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
           </div>
         )}
         {open && (
           <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 6, marginTop: 8 }}>
-              <div><div style={{ fontSize: 9, color: S.muted }}>COST</div><div style={{ fontSize: 14, fontWeight: 600, color: S.text, marginTop: 1 }}>{fmt(p.cost)}</div></div>
-              <div><div style={{ fontSize: 9, color: S.muted }}>WHOLESALE</div><div style={{ fontSize: 14, fontWeight: 600, color: S.text, marginTop: 1 }}>{fmt(p.wholesale)}</div></div>
-              <div><div style={{ fontSize: 9, color: S.muted }}>W FLOOR</div><div style={{ fontSize: 14, fontWeight: 600, color: S.amber, marginTop: 1 }}>{fmt(p.w_floor)}</div></div>
-              <div><div style={{ fontSize: 9, color: S.muted }}>E FLOOR</div><div style={{ fontSize: 14, fontWeight: 600, color: S.green, marginTop: 1 }}>{fmt(p.e_floor)}</div></div>
+            {expandedCells.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(expandedCells.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
+                {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: wsCells.length > 0 ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
+              <div style={{ background: "#131c14", padding: "6px 8px" }}>
+                <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Cost</div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(p.cost)}</div>
+              </div>
+              {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
             </div>
+            {renderPPA(adminPrice, adminPriceLabel)}
             {(rateStr || p.rate_note) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span></div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              {labelUrl ? <a href={labelUrl} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>📄 Label</a>
-                : <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.3)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.amber, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>}
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
             </div>
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg} {p.uom || ""}</div>
@@ -335,8 +409,9 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
     if (isNTreatProduct) {
       const lowRate = p.n_treat_low_rate || p.rate_min;
       const ureaRate = p.n_treat_urea_rate;
+      const nh3Rate = p.rate_note && p.rate_note.match(/Anhydrous\s+(\d+)/i) ? parseInt(p.rate_note.match(/Anhydrous\s+(\d+)/i)[1]) : null;
       const uanVols = [10, 15, 20, 25, 30];
-      const ureaLbs = [100, 150, 200];
+      const dryLbs = [50, 100, 150, 200];
       ppaSection = (
         <div style={{ background: "rgba(91,155,213,.08)", border: "1px solid rgba(91,155,213,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
           <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ {lowRate} qt/tn UAN ({activePriceLabel})</div>
@@ -353,11 +428,24 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
               <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {ureaRate} qt/tn</div>
               <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
                 <span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>
-                {ureaLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}
+                {dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}
               </div>
               <div style={{ display: "flex", gap: 4 }}>
                 <span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>
-                {ureaLbs.map(v => { const ppa = calcUreaPPA(activePrice, ureaRate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{ppa != null ? fmtAc(ppa) : "—"}</span>; })}
+                {dryLbs.map(v => { const ppa = calcUreaPPA(activePrice, ureaRate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{ppa != null ? fmtAc(ppa) : "—"}</span>; })}
+              </div>
+            </React.Fragment>
+          )}
+          {nh3Rate && (
+            <React.Fragment>
+              <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ {nh3Rate} qt/tn</div>
+              <div style={{ display: "flex", gap: 4, marginBottom: 4 }}>
+                <span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>
+                {dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}
+              </div>
+              <div style={{ display: "flex", gap: 4 }}>
+                <span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>
+                {dryLbs.map(v => { const ppa = calcUreaPPA(activePrice, nh3Rate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{ppa != null ? fmtAc(ppa) : "—"}</span>; })}
               </div>
             </React.Fragment>
           )}
@@ -392,11 +480,9 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
       </div>
 
       {showManagerCompare ? (() => {
-        // District prices first
         const distPr = district === "wtx" 
           ? { target: p.w_target, floor: p.w_floor, label: "West TX" }
           : { target: p.e_target, floor: p.e_floor, label: "East TX" };
-        // Find location overrides for this manager's locations
         const mgrLocOverrides = locationIds.map(lid => {
           const key = p.item + ":" + lid;
           const ov = overridesMap[key];
@@ -406,56 +492,70 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
           }
           return null;
         }).filter(Boolean);
+        const isLsMgr = locationIds.includes("ls");
+
+        let mgrPrice, mgrPriceLabel;
+        if (priceMode.startsWith("loc:") || priceMode.startsWith("loc_floor:")) {
+          const isLF = priceMode.startsWith("loc_floor:");
+          const lid = priceMode.split(":")[1];
+          const ov = overridesMap[p.item + ":" + lid];
+          if (ov) {
+            mgrPrice = isLF ? (ov.floor_price || ov.target_price) : (ov.target_price || ov.floor_price);
+            const loc = allLocations.find(l => l.id === lid);
+            mgrPriceLabel = (loc?.name || lid) + (isLF ? " Floor" : " Target");
+          } else { mgrPrice = distPr.target; mgrPriceLabel = distPr.label + " Target"; }
+        } else if (priceMode === "floor") {
+          mgrPrice = distPr.floor; mgrPriceLabel = distPr.label + " Floor";
+        } else {
+          mgrPrice = distPr.target; mgrPriceLabel = distPr.label + " Target";
+        }
 
         return (
+          <React.Fragment>
           <div style={{ margin: "0 12px 10px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
-              <div onClick={() => setPriceMode("target")} style={{ background: priceMode === "target" ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "target" ? "3px solid " + S.green : "3px solid transparent" }}>
-                <div style={{ fontSize: 8, color: priceMode === "target" ? S.green : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{distPr.label} Target{priceMode === "target" ? " ✓" : ""}</div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: S.green }}>{fmt(distPr.target)}</div>
-              </div>
-              <div onClick={() => setPriceMode("floor")} style={{ background: priceMode === "floor" ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "floor" ? "3px solid " + S.amber : "3px solid transparent" }}>
-                <div style={{ fontSize: 8, color: priceMode === "floor" ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{distPr.label} Floor{priceMode === "floor" ? " ✓" : ""}</div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: S.amber }}>{fmt(distPr.floor)}</div>
-              </div>
+              <PriceCell k="target" l={distPr.label + " Target"} v={distPr.target} c={S.green} sel={priceMode} onSel={setPriceMode} showMargin={true} />
+              <PriceCell k="floor" l={distPr.label + " Floor"} v={distPr.floor} c={S.amber} sel={priceMode} onSel={setPriceMode} showMargin={true} />
             </div>
             {mgrLocOverrides.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(mgrLocOverrides.length * 2, 4) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 4 }}>
-                {mgrLocOverrides.map(ov => {
-                  const locKey = "loc:" + ov.lid;
-                  const locFloorKey = "loc_floor:" + ov.lid;
-                  const isTargetActive = priceMode === locKey;
-                  const isFloorActive = priceMode === locFloorKey;
-                  const isEitherActive = isTargetActive || isFloorActive;
-                  return (
-                    <React.Fragment key={ov.locName}>
-                      <div onClick={() => setPriceMode(isTargetActive ? "target" : locKey)} style={{ background: isTargetActive ? "#141e1e" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isTargetActive ? "3px solid " + S.blue : "3px solid transparent" }}>
-                        <div style={{ fontSize: 8, color: isTargetActive ? S.blue : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{ov.locName} Target{isTargetActive ? " ✓" : ""}</div>
-                        <div style={{ fontSize: 17, fontWeight: 700, color: S.blue }}>{fmt(ov.target)}</div>
-                      </div>
-                      <div onClick={() => setPriceMode(isFloorActive ? "target" : locFloorKey)} style={{ background: isFloorActive ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isFloorActive ? "3px solid " + S.amber : "3px solid transparent" }}>
-                        <div style={{ fontSize: 8, color: isFloorActive ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{ov.locName} Floor{isFloorActive ? " ✓" : ""}</div>
-                        <div style={{ fontSize: 17, fontWeight: 700, color: S.blue }}>{fmt(ov.floor)}</div>
-                      </div>
-                    </React.Fragment>
-                  );
-                })}
+                {mgrLocOverrides.map(ov => (
+                  <React.Fragment key={ov.locName}>
+                    <PriceCell k={"loc:" + ov.lid} l={ov.locName + " Target"} v={ov.target} c={S.blue} sel={priceMode} onSel={setPriceMode} showMargin={true} />
+                    <PriceCell k={"loc_floor:" + ov.lid} l={ov.locName + " Floor"} v={ov.floor} c={S.blue} sel={priceMode} onSel={setPriceMode} showMargin={true} />
+                  </React.Fragment>
+                ))}
               </div>
             )}
           </div>
+          {open && (
+            <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
+              {isLsMgr && p.wholesale != null && p.wholesale > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
+                  <div style={{ background: "#131c14", padding: "6px 8px" }}>
+                    <div style={{ fontSize: 8, color: S.purple, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Wholesale</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: S.purple }}>{fmt(p.wholesale)}</div>
+                  </div>
+                </div>
+              )}
+              {renderPPA(mgrPrice, mgrPriceLabel)}
+              {(rateStr || rateNote) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && rateNote ? " · " : ""}{rateNote || ""}</span></div>}
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+                {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              </div>
+              <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg}</div>
+            </div>
+          )}
+          </React.Fragment>
         );
       })() : (
+        <React.Fragment>
         <div style={{ margin: "0 12px 10px" }}>
           {hasLocOverride && <div style={{ fontSize: 8, color: S.blue, textTransform: "uppercase", letterSpacing: 1, padding: "4px 8px 2px", fontWeight: 700 }}>★ {label} Location Pricing</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
-            <div onClick={() => setPriceMode("target")} style={{ background: priceMode === "target" ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "target" ? "3px solid " + accentColor : "3px solid transparent" }}>
-              <div style={{ fontSize: 8, color: priceMode === "target" ? accentColor : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Target{priceMode === "target" ? " ✓" : ""}</div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: accentColor }}>{fmt(target)}</div>
-            </div>
-            <div onClick={() => setPriceMode("floor")} style={{ background: priceMode === "floor" ? "#1e1e14" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: priceMode === "floor" ? "3px solid " + S.amber : "3px solid transparent" }}>
-              <div style={{ fontSize: 8, color: priceMode === "floor" ? S.amber : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Floor{priceMode === "floor" ? " ✓" : ""}</div>
-              <div style={{ fontSize: 17, fontWeight: 700, color: S.amber }}>{fmt(floor)}</div>
-            </div>
+            <PriceCell k="target" l="Target" v={target} c={accentColor} sel={priceMode} onSel={setPriceMode} showMargin={false} />
+            <PriceCell k="floor" l="Floor" v={floor} c={S.amber} sel={priceMode} onSel={setPriceMode} showMargin={false} />
           </div>
           {wholesale != null && wholesale > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 4 }}>
@@ -466,18 +566,18 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
             </div>
           )}
         </div>
-      )}
-
-      {open && (
-        <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
-          {ppaSection}
-          {(rateStr || rateNote) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && rateNote ? " · " : ""}{rateNote || ""}</span></div>}
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-            <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
-            {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+        {open && (
+          <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
+            {renderPPA(activePrice, activePriceLabel)}
+            {(rateStr || rateNote) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && rateNote ? " · " : ""}{rateNote || ""}</span></div>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+            </div>
+            <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg}</div>
           </div>
-          <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg}</div>
-        </div>
+        )}
+        </React.Fragment>
       )}
     </div>
     {showInfo && <InfoModal name={p.name} productInfo={productInfo} onClose={() => setShowInfo(false)} />}
