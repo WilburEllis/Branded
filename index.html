@@ -164,43 +164,68 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [useFloor, setUseFloor] = useState(false);
+  const [customRate, setCustomRate] = useState(null);
+  const [customGPA, setCustomGPA] = useState(10);
   const isOrg = organicNames.has(p.name);
+  const effectiveRate = customRate != null ? customRate : p.rate_min;
+
+  // ── Editable rate display ──
+  function RateInput({ rate, unit, color, onChange }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(String(rate));
+    const onDone = () => { const n = parseFloat(val); if (!isNaN(n) && n > 0) (onChange || setCustomRate)(n); setEditing(false); };
+    if (editing) {
+      return <input type="number" autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onBlur={onDone}
+        onKeyDown={e => { if (e.key === "Enter") onDone(); }}
+        style={{ width: 45, fontSize: 13, fontWeight: 700, color: color || S.green, background: "rgba(255,255,255,.08)", border: "1px solid " + (color || S.green), borderRadius: 4, padding: "1px 4px", outline: "none", textAlign: "center" }}
+        onClick={e => e.stopPropagation()} />;
+    }
+    return <span onClick={e => { e.stopPropagation(); setVal(String(rate)); setEditing(true); }}
+      style={{ cursor: "pointer", borderBottom: "1px dashed " + (color || S.green), fontWeight: 700, color: color || S.green }}>{rate}</span>;
+  }
 
   // ── Shared PPA renderer ──
   function renderPPA(price, priceLabel) {
     if (!price || p.rate_min == null || !p.rate_unit) return null;
     const isNTP = p.n_treatment === true || p.n_treatment === "true";
     if (isNTP) {
-      const lr = p.n_treat_low_rate || p.rate_min;
+      const defaultLr = p.n_treat_low_rate || p.rate_min;
+      const lr = customRate != null ? customRate : defaultLr;
       const ur = p.n_treat_urea_rate;
-      const nh3Rate = p.rate_note && p.rate_note.match(/Anhydrous\s+(\d+)/i) ? parseInt(p.rate_note.match(/Anhydrous\s+(\d+)/i)[1]) : null;
+      const effectiveUr = ur ? (customRate != null ? customRate : ur) : null;
+      const defaultNh3 = p.rate_note && p.rate_note.match(/Anhydrous\s+(\d+)/i) ? parseInt(p.rate_note.match(/Anhydrous\s+(\d+)/i)[1]) : null;
+      const effectiveNh3 = defaultNh3 ? (customRate != null ? customRate : defaultNh3) : null;
       const uanV = [10, 15, 20, 25, 30];
       const dryLbs = [50, 100, 150, 200];
+      const isCustom = customRate != null && customRate !== defaultLr;
       return (
         <div style={{ background: "rgba(91,155,213,.08)", border: "1px solid rgba(91,155,213,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ {lr} qt/tn UAN ({priceLabel})</div>
+          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ <RateInput rate={lr} unit="qt/tn" color={S.blue} /> qt/tn UAN ({priceLabel}){isCustom ? <span onClick={e => { e.stopPropagation(); setCustomRate(null); }} style={{ marginLeft: 6, fontSize: 9, color: S.amber, cursor: "pointer", textDecoration: "underline", textTransform: "none" }}>reset</span> : null}</div>
           <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>GAL/AC</span>{uanV.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
           <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{uanV.map(v => { const r = calcNTreatPPA(price, lr, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
-          {ur && (<React.Fragment>
-            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {ur} qt/tn</div>
+          {effectiveUr && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {effectiveUr} qt/tn</div>
             <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
-            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, ur, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, effectiveUr, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
           </React.Fragment>)}
-          {nh3Rate && (<React.Fragment>
-            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ {nh3Rate} qt/tn</div>
+          {effectiveNh3 && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ {effectiveNh3} qt/tn</div>
             <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
-            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, nh3Rate, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, effectiveNh3, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
           </React.Fragment>)}
         </div>
       );
     } else {
-      const ppa = calcPPA(p.pkg, price, p.rate_min, p.rate_unit, 20, p.dry_oz_price);
+      const ppa = calcPPA(p.pkg, price, effectiveRate, p.rate_unit, customGPA, p.dry_oz_price);
       if (!ppa) return null;
       return (
         <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? " (20 GPA)" : ""} — {priceLabel}</div>
+          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? (() => {
+            return <span> (<RateInput rate={customGPA} unit="GPA" color={S.green} onChange={v => setCustomGPA(v)} /> GPA)</span>;
+          })() : ""} — {priceLabel}</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: S.green }}>{fmtAc(ppa.val)}</div>
-          <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ {p.rate_min} {p.rate_unit}</div>
+          <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ <RateInput rate={effectiveRate} unit={p.rate_unit} color={S.green} /> {p.rate_unit}{customRate != null && customRate !== p.rate_min ? <span onClick={e => { e.stopPropagation(); setCustomRate(null); }} style={{ marginLeft: 6, fontSize: 9, color: S.amber, cursor: "pointer", textDecoration: "underline" }}>reset</span> : null}</div>
         </div>
       );
     }
@@ -387,6 +412,9 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
     } else {
       activePrice = target; activePriceLabel = "Target";
     }
+  } else if (priceMode === "ws" && p.wholesale) {
+    activePrice = p.wholesale;
+    activePriceLabel = "Wholesale";
   } else if (priceMode === "floor") {
     activePrice = floor;
     activePriceLabel = "Floor";
@@ -495,7 +523,9 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
         const isLsMgr = locationIds.includes("ls");
 
         let mgrPrice, mgrPriceLabel;
-        if (priceMode.startsWith("loc:") || priceMode.startsWith("loc_floor:")) {
+        if (priceMode === "ws" && p.wholesale) {
+          mgrPrice = p.wholesale; mgrPriceLabel = "Wholesale";
+        } else if (priceMode.startsWith("loc:") || priceMode.startsWith("loc_floor:")) {
           const isLF = priceMode.startsWith("loc_floor:");
           const lid = priceMode.split(":")[1];
           const ov = overridesMap[p.item + ":" + lid];
@@ -532,10 +562,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
             <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
               {isLsMgr && p.wholesale != null && p.wholesale > 0 && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-                  <div style={{ background: "#131c14", padding: "6px 8px" }}>
-                    <div style={{ fontSize: 8, color: S.purple, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Wholesale</div>
-                    <div style={{ fontSize: 17, fontWeight: 700, color: S.purple }}>{fmt(p.wholesale)}</div>
-                  </div>
+                  <PriceCell k="ws" l="Wholesale" v={p.wholesale} c={S.purple} sel={priceMode} onSel={setPriceMode} showMargin={true} />
                 </div>
               )}
               {renderPPA(mgrPrice, mgrPriceLabel)}
@@ -559,10 +586,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
           </div>
           {wholesale != null && wholesale > 0 && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 4 }}>
-              <div style={{ background: "#131c14", padding: "6px 8px" }}>
-                <div style={{ fontSize: 8, color: S.purple, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Wholesale</div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: S.purple }}>{fmt(wholesale)}</div>
-              </div>
+              <PriceCell k="ws" l="Wholesale" v={wholesale} c={S.purple} sel={priceMode} onSel={setPriceMode} showMargin={false} />
             </div>
           )}
         </div>
