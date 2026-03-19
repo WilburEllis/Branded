@@ -253,7 +253,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   if (isAdmin && !isNational) {
     // Collapsed: district targets + location targets
     const collapsedCells = [];
-    if (p.w_target != null) collapsedCells.push({ k: "w_target", l: "W TX Target", v: p.w_target, c: S.amber });
+    if (p.w_target != null) collapsedCells.push({ k: "w_target", l: "W TX Target", v: p.w_target, c: S.green });
     if (p.e_target != null) collapsedCells.push({ k: "e_target", l: "E TX Target", v: p.e_target, c: S.green });
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
@@ -263,7 +263,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     // Expanded: cost, wholesale, floor prices
     const expandedCells = [];
     if (p.w_floor != null) expandedCells.push({ k: "w_floor", l: "W TX Floor", v: p.w_floor, c: S.amber });
-    if (p.e_floor != null) expandedCells.push({ k: "e_floor", l: "E TX Floor", v: p.e_floor, c: S.green });
+    if (p.e_floor != null) expandedCells.push({ k: "e_floor", l: "E TX Floor", v: p.e_floor, c: S.amber });
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
       if (overridesMap[rhKey]?.floor_price != null) expandedCells.push({ k: "rh_f", l: "Rio Hondo Floor", v: overridesMap[rhKey].floor_price, c: S.blue });
@@ -583,7 +583,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         <div style={{ margin: "0 12px 10px" }}>
           {hasLocOverride && <div style={{ fontSize: 8, color: S.blue, textTransform: "uppercase", letterSpacing: 1, padding: "4px 8px 2px", fontWeight: 700 }}>★ {label} Location Pricing</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden" }}>
-            <PriceCell k="target" l="Target" v={target} c={accentColor} sel={priceMode} onSel={setPriceMode} showMargin={false} />
+            <PriceCell k="target" l="Target" v={target} c={S.green} sel={priceMode} onSel={setPriceMode} showMargin={false} />
             <PriceCell k="floor" l="Floor" v={floor} c={S.amber} sel={priceMode} onSel={setPriceMode} showMargin={false} />
           </div>
           {wholesale != null && wholesale > 0 && (
