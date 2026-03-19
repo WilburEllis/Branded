@@ -834,7 +834,7 @@ function App() {
     } else if (view === "nat") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
-      content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} {...cardProps} />));
+      content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} hideCost={hideCost} {...cardProps} />));
     } else if (view === "organic") {
       const { txOrg, natOrg } = filtered;
       const txG = groupByName(txOrg); const natG = groupByName(natOrg);
@@ -842,7 +842,7 @@ function App() {
       content = (<React.Fragment>
         {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />))}
         {natG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {natG.length} more</div>}
-        {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} {...cardProps} />))}
+        {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} hideCost={hideCost} {...cardProps} />))}
       </React.Fragment>);
     } else if (view === "all") {
       const { tx, nat } = filtered;
@@ -851,7 +851,7 @@ function App() {
       content = (<React.Fragment>
         {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />))}
         {natG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {natG.length} more</div>}
-        {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} {...cardProps} />))}
+        {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} hideCost={hideCost} {...cardProps} />))}
       </React.Fragment>);
     }
   } else {
