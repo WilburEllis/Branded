@@ -160,11 +160,13 @@ function InfoModal({ name, productInfo, onClose }) {
 }
 
 // ═══ PRODUCT CARD ═══
-function ProductCard({ p, district, location, isNational, isAdmin, isManager, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls }) {
+function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls }) {
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [useFloor, setUseFloor] = useState(false);
   const [customRate, setCustomRate] = useState(null);
+  const [customUreaRate, setCustomUreaRate] = useState(null);
+  const [customNh3Rate, setCustomNh3Rate] = useState(null);
   const [customGPA, setCustomGPA] = useState(10);
   const isOrg = organicNames.has(p.name);
   const effectiveRate = customRate != null ? customRate : p.rate_min;
@@ -192,27 +194,27 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
     if (isNTP) {
       const defaultLr = p.n_treat_low_rate || p.rate_min;
       const lr = customRate != null ? customRate : defaultLr;
-      const ur = p.n_treat_urea_rate;
-      const effectiveUr = ur ? (customRate != null ? customRate : ur) : null;
+      const defaultUr = p.n_treat_urea_rate;
+      const ur = defaultUr ? (customUreaRate != null ? customUreaRate : defaultUr) : null;
       const defaultNh3 = p.rate_note && p.rate_note.match(/Anhydrous\s+(\d+)/i) ? parseInt(p.rate_note.match(/Anhydrous\s+(\d+)/i)[1]) : null;
-      const effectiveNh3 = defaultNh3 ? (customRate != null ? customRate : defaultNh3) : null;
+      const nh3r = defaultNh3 ? (customNh3Rate != null ? customNh3Rate : defaultNh3) : null;
       const uanV = [10, 15, 20, 25, 30];
       const dryLbs = [50, 100, 150, 200];
-      const isCustom = customRate != null && customRate !== defaultLr;
+      const anyCustom = (customRate != null && customRate !== defaultLr) || (customUreaRate != null && customUreaRate !== defaultUr) || (customNh3Rate != null && customNh3Rate !== defaultNh3);
       return (
         <div style={{ background: "rgba(91,155,213,.08)", border: "1px solid rgba(91,155,213,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ <RateInput rate={lr} unit="qt/tn" color={S.blue} /> qt/tn UAN ({priceLabel}){isCustom ? <span onClick={e => { e.stopPropagation(); setCustomRate(null); }} style={{ marginLeft: 6, fontSize: 9, color: S.amber, cursor: "pointer", textDecoration: "underline", textTransform: "none" }}>reset</span> : null}</div>
+          <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>📈 Price/Acre @ <RateInput rate={lr} unit="qt/tn" color={S.blue} /> qt/tn UAN ({priceLabel}){anyCustom ? <span onClick={e => { e.stopPropagation(); setCustomRate(null); setCustomUreaRate(null); setCustomNh3Rate(null); }} style={{ marginLeft: 6, fontSize: 9, color: S.amber, cursor: "pointer", textDecoration: "underline", textTransform: "none" }}>reset all</span> : null}</div>
           <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>GAL/AC</span>{uanV.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
           <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{uanV.map(v => { const r = calcNTreatPPA(price, lr, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
-          {effectiveUr && (<React.Fragment>
-            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ {effectiveUr} qt/tn</div>
+          {ur != null && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>UREA @ <RateInput rate={ur} unit="qt/tn" color={S.blue} onChange={v => setCustomUreaRate(v)} /> qt/tn</div>
             <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
-            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, effectiveUr, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, ur, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
           </React.Fragment>)}
-          {effectiveNh3 && (<React.Fragment>
-            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ {effectiveNh3} qt/tn</div>
+          {nh3r != null && (<React.Fragment>
+            <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginTop: 8, marginBottom: 4 }}>NH3 (ANHYDROUS) @ <RateInput rate={nh3r} unit="qt/tn" color={S.blue} onChange={v => setCustomNh3Rate(v)} /> qt/tn</div>
             <div style={{ display: "flex", gap: 4, marginBottom: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>LBS/AC</span>{dryLbs.map(v => <span key={v} style={{ flex: 1, fontSize: 9, color: S.muted, textAlign: "right" }}>{v}</span>)}</div>
-            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, effectiveNh3, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
+            <div style={{ display: "flex", gap: 4 }}><span style={{ flex: 1, fontSize: 9, color: S.muted }}>$/ACRE</span>{dryLbs.map(v => { const r = calcUreaPPA(price, nh3r, v); return <span key={v} style={{ flex: 1, fontSize: 12, fontWeight: 600, color: S.text, textAlign: "right" }}>{r != null ? fmtAc(r) : "—"}</span>; })}</div>
           </React.Fragment>)}
         </div>
       );
@@ -291,22 +293,22 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
         </div>
         {collapsedCells.length > 0 && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(collapsedCells.length, 2) + ",1fr)", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
-            {collapsedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
+            {collapsedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
           </div>
         )}
         {open && (
           <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
             {expandedCells.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(expandedCells.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-                {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
+                {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
               </div>
             )}
-            <div style={{ display: "grid", gridTemplateColumns: wsCells.length > 0 ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-              <div style={{ background: "#131c14", padding: "6px 8px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: (!hideCost && wsCells.length > 0) ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
+              {!hideCost && <div style={{ background: "#131c14", padding: "6px 8px" }}>
                 <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Cost</div>
                 <div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(p.cost)}</div>
-              </div>
-              {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={true} />)}
+              </div>}
+              {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
             </div>
             {renderPPA(adminPrice, adminPriceLabel)}
             {(rateStr || p.rate_note) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span></div>}
@@ -341,7 +343,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, lo
         </div>
         {open && (
           <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
-            {p.cost_2026 != null && p.nat_target != null && (() => {
+            {!hideCost && p.cost_2026 != null && p.nat_target != null && (() => {
               const mg = p.nat_target - p.cost_2026; const mp = ((mg / p.nat_target) * 100);
               return (<div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
                 <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>Margin Analysis</div>
@@ -693,7 +695,7 @@ function App() {
         (lu || []).forEach(l => { luMap[l.name] = l.url; });
         setLabelUrls(luMap);
 
-        setView(prof?.role === "admin" ? "tx" : "district");
+        setView(prof?.role === "admin" || prof?.role === "viewer_admin" ? "tx" : "district");
       } catch (err) {
         console.error("Load error:", err);
         setConnError("Error loading data: " + (err.message || String(err)));
@@ -729,7 +731,7 @@ function App() {
   const natAlpha = ["ALL", "A-F", "G-L", "M-R", "S-Z"];
 
   const districtProducts = useMemo(() => {
-    if (!profile || profile.role === "admin") return [];
+    if (!profile || profile.role === "admin" || profile.role === "viewer_admin") return [];
     const dist = profile.district;
     const loc = profile.location_ids?.[0] || null;
     return txData.filter(p => hasDistrictPrice(p, dist, loc, overridesMap));
@@ -741,7 +743,7 @@ function App() {
   }, [districtProducts]);
 
   const natOnlyProducts = useMemo(() => {
-    if (!profile || profile.role === "admin") return [];
+    if (!profile || profile.role === "admin" || profile.role === "viewer_admin") return [];
     const txItems = new Set(districtProducts.map(p => p.item));
     return natData.filter(p => !txItems.has(p.item) && p.nat_target != null);
   }, [profile, districtProducts, natData]);
@@ -754,7 +756,7 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    const isAdmin = profile?.role === "admin";
+    const isAdmin = profile?.role === "admin" || profile?.role === "viewer_admin";
     if (isAdmin) {
       if (view === "tx") return txData.filter(p => (catFilter === "ALL" || p.cat === catFilter) && (!q || p.name.toLowerCase().includes(q) || String(p.item).includes(q)));
       if (view === "nat") return natData.filter(p => {
@@ -799,7 +801,8 @@ function App() {
   if (!session) return <LoginScreen onLogin={handleLogin} error={loginError} loading={loginLoading} />;
   if (!profile) return <LoadingScreen />;
 
-  const isAdmin = profile.role === "admin";
+  const isAdmin = profile.role === "admin" || profile.role === "viewer_admin";
+  const hideCost = profile.role === "viewer_admin";
   const dist = profile.district;
   const loc = profile.location_ids?.[0] || null;
   const locIds = profile.location_ids || [];
@@ -827,7 +830,7 @@ function App() {
     if (view === "tx") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
-      content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} {...cardProps} />));
+      content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />));
     } else if (view === "nat") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
@@ -837,7 +840,7 @@ function App() {
       const txG = groupByName(txOrg); const natG = groupByName(natOrg);
       countText = (txG.length + natG.length) + " organic products";
       content = (<React.Fragment>
-        {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} {...cardProps} />))}
+        {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />))}
         {natG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {natG.length} more</div>}
         {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} {...cardProps} />))}
       </React.Fragment>);
@@ -846,7 +849,7 @@ function App() {
       const txG = groupByName(tx); const natG = groupByName(nat);
       countText = (txG.length + natG.length) + " products · " + (tx.length + nat.length) + " SKUs";
       content = (<React.Fragment>
-        {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} {...cardProps} />))}
+        {txG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />))}
         {natG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {natG.length} more</div>}
         {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} {...cardProps} />))}
       </React.Fragment>);
