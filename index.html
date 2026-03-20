@@ -359,6 +359,10 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               <div><div style={{ fontSize: 9, color: S.muted }}>Package</div><div style={{ fontSize: 14, fontWeight: 600, color: S.text, marginTop: 1 }}>{p.pkg} {p.uom || ""}</div></div>
             </div>
             {p.wtx_update != null && <div style={{ marginTop: 6 }}><div style={{ fontSize: 9, color: S.amber }}>WTX Update</div><div style={{ fontSize: 14, fontWeight: 600, color: S.amber }}>{fmt(p.wtx_update)}</div></div>}
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+            </div>
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item}</div>
           </div>
         )}
@@ -683,7 +687,9 @@ function App() {
         setLocations(locs || []);
 
         const { data: orgSkus } = await supabase.from("skus").select("name").eq("is_organic", true);
-        setOrganicNames(new Set((orgSkus || []).map(s => s.name)));
+        const { data: orgNat } = await supabase.from("national_prices").select("name").eq("is_organic", true);
+        const allOrg = new Set([...(orgSkus || []).map(s => s.name), ...(orgNat || []).map(s => s.name)]);
+        setOrganicNames(allOrg);
 
         const { data: pi } = await supabase.from("product_info").select("*");
         const piMap = {};
@@ -751,8 +757,8 @@ function App() {
   const organicDistrict = useMemo(() => districtProducts.filter(p => organicNames.has(p.name)), [districtProducts, organicNames]);
   const organicNatOnly = useMemo(() => {
     const distNames = new Set(organicDistrict.map(p => p.name));
-    return natOnlyProducts.filter(p => organicNames.has(p.name) && !distNames.has(p.name));
-  }, [organicDistrict, natOnlyProducts, organicNames]);
+    return natData.filter(p => organicNames.has(p.name) && !distNames.has(p.name));
+  }, [organicDistrict, natData, organicNames]);
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
