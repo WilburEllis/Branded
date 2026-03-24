@@ -8,6 +8,21 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
+<script>
+// Force refresh for home screen apps - bump this number with each deploy
+const APP_VERSION = "2.0.1";
+const storedVersion = localStorage.getItem("we_app_version");
+if (storedVersion && storedVersion !== APP_VERSION) {
+  localStorage.setItem("we_app_version", APP_VERSION);
+  // Clear all caches and reload
+  if ('caches' in window) {
+    caches.keys().then(names => names.forEach(name => caches.delete(name)));
+  }
+  window.location.reload(true);
+} else {
+  localStorage.setItem("we_app_version", APP_VERSION);
+}
+</script>
 <title>WE Price Lookup — 2026 TX Branded</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
