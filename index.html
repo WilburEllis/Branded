@@ -11,10 +11,14 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1410; color: #d4e0d5; -webkit-font-smoothing: antialiased; }
   input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 2px solid #5b9bd5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); margin-top: -7px; }
+  input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 2px solid #5b9bd5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+  select option { background: #171e18; color: #d4e0d5; }
   @keyframes spin { to { transform: rotate(360deg); } }
   ::-webkit-scrollbar { width: 0; height: 0; }
 </style>
@@ -28,6 +32,47 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 const SUPABASE_URL = "https://gumpxdchfqatszeuldvm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bXB4ZGNoZnFhdHN6ZXVsZHZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5OTYyNzcsImV4cCI6MjA4ODU3MjI3N30.AtMh0jDDKctXupluF5fqThMb58xOUjlNoy1RTcwmxRQ";
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ═══ ANALYTICS TRACKER ═══
+const Analytics = (() => {
+  const sessionId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  let currentUser = null;
+  let heartbeatInterval = null;
+  let lastSearchLog = 0;
+
+  function setUser(profile, email) {
+    currentUser = { id: profile.id, email: email || profile.email || "", name: profile.display_name || profile.name || "" };
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+    heartbeatInterval = setInterval(() => track("session_heartbeat"), 60000);
+  }
+
+  function track(eventType, eventData) {
+    if (!currentUser) return;
+    try {
+      supabase.from("user_activity").insert({
+        user_id: currentUser.id,
+        user_email: currentUser.email,
+        user_name: currentUser.name,
+        event_type: eventType,
+        event_data: eventData || {},
+        session_id: sessionId
+      }).then(() => {});
+    } catch (e) {}
+  }
+
+  function trackSearch(term) {
+    const now = Date.now();
+    if (now - lastSearchLog < 2000) return;
+    lastSearchLog = now;
+    track("search", { term });
+  }
+
+  function cleanup() {
+    if (heartbeatInterval) clearInterval(heartbeatInterval);
+  }
+
+  return { setUser, track, trackSearch, sessionId, cleanup };
+})();
 
 // ═══ STYLES ═══
 const S = {
@@ -175,7 +220,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   function RateInput({ rate, unit, color, onChange }) {
     const [editing, setEditing] = useState(false);
     const [val, setVal] = useState(String(rate));
-    const onDone = () => { const n = parseFloat(val); if (!isNaN(n) && n > 0) (onChange || setCustomRate)(n); setEditing(false); };
+    const onDone = () => { const n = parseFloat(val); if (!isNaN(n) && n > 0) { (onChange || setCustomRate)(n); Analytics.track("rate_changed", { product: p.name, rate: n, unit }); } setEditing(false); };
     if (editing) {
       return <input type="number" autoFocus value={val} onChange={e => setVal(e.target.value)}
         onBlur={onDone}
@@ -282,7 +327,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
     return (<React.Fragment>
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
-        <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
+        <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
           <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -313,8 +358,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             {renderPPA(adminPrice, adminPriceLabel)}
             {(rateStr || p.rate_note) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span></div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
-              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
             </div>
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg} {p.uom || ""}</div>
           </div>
@@ -328,7 +373,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   if (isAdmin && isNational) {
     return (<React.Fragment>
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
-        <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
+        <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
           <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -360,8 +405,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             </div>
             {p.wtx_update != null && <div style={{ marginTop: 6 }}><div style={{ fontSize: 9, color: S.amber }}>WTX Update</div><div style={{ fontSize: 14, fontWeight: 600, color: S.amber }}>{fmt(p.wtx_update)}</div></div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
-              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
             </div>
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item}</div>
           </div>
@@ -503,7 +548,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
   return (<React.Fragment>
     <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
-      <div onClick={() => setOpen(!open)} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
+      <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
         <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
           <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -574,8 +619,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               {renderPPA(mgrPrice, mgrPriceLabel)}
               {(rateStr || rateNote) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && rateNote ? " · " : ""}{rateNote || ""}</span></div>}
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-                <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
-                {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+                <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+                {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
               </div>
               <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg}</div>
             </div>
@@ -601,8 +646,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             {renderPPA(activePrice, activePriceLabel)}
             {(rateStr || rateNote) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && rateNote ? " · " : ""}{rateNote || ""}</span></div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
-              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
-              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
+              {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
             </div>
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg}</div>
           </div>
@@ -614,6 +659,947 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   </React.Fragment>);
 }
 
+
+// ═══ ANALYTICS CHARTS ═══
+function UsageChart({ data }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!canvasRef.current || !data || data.length === 0) return;
+    if (chartRef.current) chartRef.current.destroy();
+
+    const labels = data.map(d => {
+      const dt = new Date(d.date + "T12:00:00");
+      return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    });
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Logins", data: data.map(d => d.logins), backgroundColor: "#4caf6a", borderRadius: 3, barPercentage: 0.7 },
+          { label: "Searches", data: data.map(d => d.searches), backgroundColor: "#5b9bd5", borderRadius: 3, barPercentage: 0.7 },
+          { label: "Cards Opened", data: data.map(d => d.productViews), backgroundColor: "#b07de8", borderRadius: 3, barPercentage: 0.7 },
+          { label: "Calc Uses", data: data.map(d => d.calcUses), backgroundColor: "#e8a230", borderRadius: 3, barPercentage: 0.7 },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { position: "bottom", labels: { color: "#6b8a6e", font: { size: 10 }, boxWidth: 12, padding: 10 } }
+        },
+        scales: {
+          x: { stacked: true, ticks: { color: "#6b8a6e", font: { size: 9 }, maxRotation: 45 }, grid: { color: "rgba(42,58,44,.3)" } },
+          y: { stacked: true, ticks: { color: "#6b8a6e", font: { size: 10 }, stepSize: 1 }, grid: { color: "rgba(42,58,44,.3)" } }
+        }
+      }
+    });
+
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [data]);
+
+  return <div style={{ height: 220 }}><canvas ref={canvasRef} /></div>;
+}
+
+function HourlyChart({ data }) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+
+  useEffect(() => {
+    if (!canvasRef.current || !data) return;
+    if (chartRef.current) chartRef.current.destroy();
+
+    const labels = data.map((_, i) => {
+      const h = i % 12 || 12;
+      return h + (i < 12 ? "a" : "p");
+    });
+
+    chartRef.current = new Chart(canvasRef.current, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [{
+          label: "Events",
+          data: data,
+          backgroundColor: data.map(v => {
+            const max = Math.max(...data, 1);
+            const pct = v / max;
+            return pct > 0.7 ? "#4caf6a" : pct > 0.3 ? "#e8a230" : "#2a3a2c";
+          }),
+          borderRadius: 3,
+          barPercentage: 0.8
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#6b8a6e", font: { size: 8 } }, grid: { display: false } },
+          y: { ticks: { color: "#6b8a6e", font: { size: 10 }, stepSize: 1 }, grid: { color: "rgba(42,58,44,.3)" } }
+        }
+      }
+    });
+
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [data]);
+
+  return <div style={{ height: 160 }}><canvas ref={canvasRef} /></div>;
+}
+
+// ═══ ANALYTICS DASHBOARD (Admin Only) ═══
+function AnalyticsDashboard() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [timeRange, setTimeRange] = useState("7d");
+
+  useEffect(() => {
+    loadAnalytics();
+  }, [timeRange]);
+
+  async function loadAnalytics() {
+    setLoading(true);
+    const daysAgo = timeRange === "24h" ? 1 : timeRange === "7d" ? 7 : 30;
+    const since = new Date(Date.now() - daysAgo * 86400000).toISOString();
+
+    const { data: rows, error } = await supabase
+      .from("user_activity")
+      .select("*")
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(5000);
+
+    if (error) { console.error("Analytics error:", error); setLoading(false); return; }
+
+    // Process data
+    const logins = rows.filter(r => r.event_type === "login");
+    const searches = rows.filter(r => r.event_type === "search");
+    const pageViews = rows.filter(r => r.event_type === "page_view");
+    const calcEvents = rows.filter(r => r.event_type.startsWith("calc_"));
+    const heartbeats = rows.filter(r => r.event_type === "session_heartbeat" || r.event_type === "login");
+
+    // Unique users
+    const uniqueUsers = [...new Set(rows.map(r => r.user_email))];
+
+    // Sessions with duration
+    const sessions = {};
+    rows.forEach(r => {
+      if (!sessions[r.session_id]) sessions[r.session_id] = { user: r.user_email || r.user_name, start: r.created_at, end: r.created_at, events: 0 };
+      const s = sessions[r.session_id];
+      if (r.created_at < s.start) s.start = r.created_at;
+      if (r.created_at > s.end) s.end = r.created_at;
+      s.events++;
+    });
+    const sessionList = Object.values(sessions).map(s => ({
+      ...s,
+      durationMin: Math.round((new Date(s.end) - new Date(s.start)) / 60000)
+    })).sort((a, b) => new Date(b.start) - new Date(a.start));
+
+    // Top searched terms
+    const searchTerms = {};
+    searches.forEach(r => {
+      const t = r.event_data?.term?.toLowerCase();
+      if (t) searchTerms[t] = (searchTerms[t] || 0) + 1;
+    });
+    const topSearches = Object.entries(searchTerms).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // Calc product popularity
+    const vaToggles = rows.filter(r => r.event_type === "calc_toggle_va" && r.event_data?.enabled);
+    const vaPopularity = {};
+    vaToggles.forEach(r => {
+      const p = r.event_data?.product;
+      if (p) vaPopularity[p] = (vaPopularity[p] || 0) + 1;
+    });
+    const topVA = Object.entries(vaPopularity).sort((a, b) => b[1] - a[1]);
+
+    // User activity summary
+    const userActivity = {};
+    rows.forEach(r => {
+      const u = r.user_email || r.user_name || "Unknown";
+      if (!userActivity[u]) userActivity[u] = { logins: 0, searches: 0, calcUses: 0, lastSeen: r.created_at };
+      if (r.event_type === "login") userActivity[u].logins++;
+      if (r.event_type === "search") userActivity[u].searches++;
+      if (r.event_type.startsWith("calc_")) userActivity[u].calcUses++;
+      if (r.created_at > userActivity[u].lastSeen) userActivity[u].lastSeen = r.created_at;
+    });
+    const userList = Object.entries(userActivity).sort((a, b) => new Date(b[1].lastSeen) - new Date(a[1].lastSeen));
+
+    // Feature usage: calc vs prices
+    const calcViews = pageViews.filter(r => r.event_data?.mode === "calc").length;
+    const priceViews = pageViews.filter(r => r.event_data?.tab).length;
+
+    // New: product card views
+    const productViews = rows.filter(r => r.event_type === "product_view");
+    const productViewCounts = {};
+    productViews.forEach(r => {
+      const n = r.event_data?.name;
+      if (n) productViewCounts[n] = (productViewCounts[n] || 0) + 1;
+    });
+    const topProductViews = Object.entries(productViewCounts).sort((a, b) => b[1] - a[1]).slice(0, 15);
+
+    // New: label searches
+    const labelSearches = rows.filter(r => r.event_type === "label_search");
+    const labelSearchCounts = {};
+    labelSearches.forEach(r => {
+      const n = r.event_data?.name;
+      if (n) labelSearchCounts[n] = (labelSearchCounts[n] || 0) + 1;
+    });
+    const topLabelSearches = Object.entries(labelSearchCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // New: rate changes
+    const rateChanges = rows.filter(r => r.event_type === "rate_changed");
+    const rateChangeCounts = {};
+    rateChanges.forEach(r => {
+      const n = r.event_data?.product;
+      if (n) rateChangeCounts[n] = (rateChangeCounts[n] || 0) + 1;
+    });
+    const topRateChanges = Object.entries(rateChangeCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // New: product info clicks
+    const infoClicks = rows.filter(r => r.event_type === "product_info_click");
+    const infoClickCounts = {};
+    infoClicks.forEach(r => {
+      const n = r.event_data?.name;
+      if (n) infoClickCounts[n] = (infoClickCounts[n] || 0) + 1;
+    });
+    const topInfoClicks = Object.entries(infoClickCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+
+    // Daily usage timeline
+    const dailyUsage = {};
+    rows.forEach(r => {
+      const day = r.created_at.slice(0, 10);
+      if (!dailyUsage[day]) dailyUsage[day] = { total: 0, logins: 0, searches: 0, productViews: 0, calcUses: 0, labelSearches: 0 };
+      dailyUsage[day].total++;
+      if (r.event_type === "login") dailyUsage[day].logins++;
+      if (r.event_type === "search") dailyUsage[day].searches++;
+      if (r.event_type === "product_view") dailyUsage[day].productViews++;
+      if (r.event_type.startsWith("calc_")) dailyUsage[day].calcUses++;
+      if (r.event_type === "label_search") dailyUsage[day].labelSearches++;
+    });
+    // Fill in missing days
+    const allDays = [];
+    const startDate = new Date(since);
+    const endDate = new Date();
+    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
+      const key = d.toISOString().slice(0, 10);
+      allDays.push(key);
+      if (!dailyUsage[key]) dailyUsage[key] = { total: 0, logins: 0, searches: 0, productViews: 0, calcUses: 0, labelSearches: 0 };
+    }
+    const timelineData = allDays.map(d => ({ date: d, ...dailyUsage[d] }));
+
+    // Hourly heatmap (hour of day)
+    const hourlyUsage = new Array(24).fill(0);
+    rows.forEach(r => {
+      const h = new Date(r.created_at).getHours();
+      hourlyUsage[h]++;
+    });
+
+    setData({
+      totalEvents: rows.length, uniqueUsers, logins: logins.length,
+      searches: searches.length, topSearches, calcViews, priceViews,
+      sessionList: sessionList.slice(0, 20), topVA, userList,
+      topProductViews, topLabelSearches, topRateChanges,
+      productViewCount: productViews.length, labelSearchCount: labelSearches.length, rateChangeCount: rateChanges.length,
+      infoClickCount: infoClicks.length, topInfoClicks,
+      timelineData, hourlyUsage,
+      rawRows: rows
+    });
+    setLoading(false);
+  }
+
+  const [drillDown, setDrillDown] = useState(null);
+
+  const cs = { background: S.inputBg, borderRadius: 10, padding: "12px 14px", border: "1px solid " + S.border, marginBottom: 8, cursor: "pointer", transition: "border-color .2s" };
+  const metricStyle = { fontSize: 28, fontWeight: 800, color: S.green };
+  const metricLabel = { fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: .5, marginTop: 2 };
+
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function openDrill(title, eventType, filterFn) {
+    if (!data) return;
+    const items = filterFn ? data.rawRows.filter(filterFn) : data.rawRows.filter(r => r.event_type === eventType);
+    setDrillDown({ title, items: items.slice(0, 100) });
+  }
+
+  const [expandedUser, setExpandedUser] = useState(null); // { email, type }
+
+  function toggleUserDrill(email, type) {
+    if (expandedUser && expandedUser.email === email && expandedUser.type === type) {
+      setExpandedUser(null);
+    } else {
+      setExpandedUser({ email, type });
+    }
+  }
+
+  function getUserDrillItems(email, type) {
+    if (!data) return [];
+    if (type === "login") return data.rawRows.filter(r => r.user_email === email && r.event_type === "login");
+    if (type === "search") return data.rawRows.filter(r => r.user_email === email && r.event_type === "search");
+    if (type === "calc") return data.rawRows.filter(r => r.user_email === email && r.event_type.startsWith("calc_"));
+    return [];
+  }
+
+  function renderDrillItem(r) {
+    const time = fmtTime(r.created_at);
+    const user = r.user_email || r.user_name || "";
+    switch (r.event_type) {
+      case "login":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+          <span style={{ color: S.green, fontWeight: 600 }}>{user}</span>
+          <span style={{ color: S.muted, marginLeft: 8 }}>{time}</span>
+          {r.event_data?.role && <span style={{ color: S.muted, marginLeft: 6, fontSize: 10 }}>({r.event_data.role})</span>}
+        </div>;
+      case "search":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>searched</span> <span style={{ color: S.blue, fontWeight: 600 }}>"{r.event_data?.term}"</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "page_view":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>viewed</span> <span style={{ color: S.purple, fontWeight: 600 }}>{r.event_data?.mode || r.event_data?.tab || "—"}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "product_view":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>opened</span> <span style={{ color: S.blue, fontWeight: 600 }}>{r.event_data?.name}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "label_search":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>searched label for</span> <span style={{ color: S.green, fontWeight: 600 }}>{r.event_data?.name}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "rate_changed":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>changed rate on</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>to</span> <span style={{ fontWeight: 600 }}>{r.event_data?.rate} {r.event_data?.unit}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "product_info_click":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>viewed info for</span> <span style={{ color: "#818cf8", fontWeight: 600 }}>{r.event_data?.name}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "calc_commodity":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>selected commodity</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "calc_toggle_va":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_data?.enabled ? "enabled" : "disabled"}</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      default:
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_type}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+    }
+  }
+
+  const timeButtons = ["24h", "7d", "30d"];
+
+  return (
+    <div style={{ padding: "10px 12px 100px" }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {timeButtons.map(t => (
+          <button key={t} onClick={() => setTimeRange(t)}
+            style={{ flex: 1, padding: "8px", borderRadius: 8, border: "1px solid " + (t === timeRange ? S.purple : S.border), background: t === timeRange ? "rgba(176,125,232,.15)" : S.tag, color: t === timeRange ? S.purple : S.muted, fontSize: 12, fontWeight: 700, cursor: "pointer", textTransform: "uppercase" }}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: 40, color: S.muted }}>
+          <div style={{ width: 24, height: 24, border: "3px solid " + S.border, borderTopColor: S.purple, borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto 10px" }} />
+          Loading analytics...
+        </div>
+      ) : data && (
+        <React.Fragment>
+          {/* DRILL-DOWN MODAL */}
+          {drillDown && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 12, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>🔍 {drillDown.title}</span>
+                <button onClick={() => setDrillDown(null)} style={{ background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", color: "#ef4444", borderRadius: 6, padding: "3px 10px", fontSize: 10, fontWeight: 700, cursor: "pointer" }}>✕ Close</button>
+              </div>
+              <div style={{ padding: "8px 14px 14px", maxHeight: 400, overflowY: "auto" }}>
+                {drillDown.items.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No data</div>}
+                {drillDown.items.map(r => renderDrillItem(r))}
+              </div>
+            </div>
+          )}
+
+          {/* SUMMARY METRICS - CLICKABLE */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("All Users", null, r => r.event_type === "login")}>
+              <div style={metricStyle}>{data.uniqueUsers.length}</div>
+              <div style={metricLabel}>Users ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("All Logins", "login")}>
+              <div style={metricStyle}>{data.logins}</div>
+              <div style={metricLabel}>Logins ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("All Events", null, () => true)}>
+              <div style={metricStyle}>{data.totalEvents}</div>
+              <div style={metricLabel}>Events ▸</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("All Searches", "search")}>
+              <div style={{ ...metricStyle, color: S.blue }}>{data.searches}</div>
+              <div style={metricLabel}>Searches ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Calculator Usage", null, r => r.event_type.startsWith("calc_"))}>
+              <div style={{ ...metricStyle, color: S.amber }}>{data.calcViews}</div>
+              <div style={metricLabel}>Calc Uses ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Tab Views", "page_view")}>
+              <div style={{ ...metricStyle, color: S.purple }}>{data.priceViews}</div>
+              <div style={metricLabel}>Tab Views ▸</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("Cards Opened", "product_view")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#5b9bd5" }}>{data.productViewCount}</div>
+              <div style={metricLabel}>Cards Opened ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Labels Searched", "label_search")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#4caf6a" }}>{data.labelSearchCount}</div>
+              <div style={metricLabel}>Labels Searched ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Rate Changes", "rate_changed")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#e8a230" }}>{data.rateChangeCount}</div>
+              <div style={metricLabel}>Rates Changed ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Product Info Viewed", "product_info_click")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#818cf8" }}>{data.infoClickCount}</div>
+              <div style={metricLabel}>Info Clicked ▸</div>
+            </div>
+          </div>
+
+          {/* USAGE TIMELINE CHART */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>📈 Daily Usage</div>
+            <div style={{ padding: "12px 14px" }}>
+              <UsageChart data={data.timelineData} />
+            </div>
+          </div>
+
+          {/* HOURLY ACTIVITY */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🕐 Activity by Hour</div>
+            <div style={{ padding: "12px 14px" }}>
+              <HourlyChart data={data.hourlyUsage} />
+            </div>
+          </div>
+
+          {/* TOP PRODUCT CARDS OPENED */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>📋 Most Viewed Products</div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.topProductViews.map(([name, count]) => (
+                <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                  <span style={{ fontWeight: 500 }}>{name}</span>
+                  <span style={{ color: S.blue }}>{count}x viewed</span>
+                </div>
+              ))}
+              {data.topProductViews.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No card views yet</div>}
+            </div>
+          </div>
+
+          {/* LABELS SEARCHED */}
+          {data.topLabelSearches.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🏷️ Labels Searched</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topLabelSearches.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.green }}>{count}x</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* RATES CHANGED */}
+          {data.topRateChanges.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🔄 Products with Rate Changes</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topRateChanges.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.amber }}>{count}x adjusted</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {data.topInfoClicks.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>📚 Product Info Viewed</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topInfoClicks.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: "#818cf8" }}>{count}x viewed</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* USER ACTIVITY */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>👤 User Activity</div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.userList.map(([email, u]) => {
+                const isLoginOpen = expandedUser && expandedUser.email === email && expandedUser.type === "login";
+                const isSearchOpen = expandedUser && expandedUser.email === email && expandedUser.type === "search";
+                const isCalcOpen = expandedUser && expandedUser.email === email && expandedUser.type === "calc";
+                const anyOpen = isLoginOpen || isSearchOpen || isCalcOpen;
+
+                return (
+                  <div key={email} style={{ borderBottom: "1px solid " + S.border + "60", paddingBottom: anyOpen ? 8 : 0 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", fontSize: 12 }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{email}</div>
+                        <div style={{ color: S.muted, fontSize: 10 }}>Last: {new Date(u.lastSeen).toLocaleDateString()} {new Date(u.lastSeen).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, fontSize: 10 }}>
+                        <span onClick={() => toggleUserDrill(email, "login")} style={{ background: isLoginOpen ? "rgba(76,175,106,.25)" : "rgba(76,175,106,.12)", color: S.green, padding: "2px 6px", borderRadius: 4, cursor: "pointer", border: "1px solid " + (isLoginOpen ? S.green : "rgba(76,175,106,.25)") }}>{u.logins} logins {isLoginOpen ? "▾" : "▸"}</span>
+                        <span onClick={() => toggleUserDrill(email, "search")} style={{ background: isSearchOpen ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.12)", color: S.blue, padding: "2px 6px", borderRadius: 4, cursor: "pointer", border: "1px solid " + (isSearchOpen ? S.blue : "rgba(91,155,213,.25)") }}>{u.searches} searches {isSearchOpen ? "▾" : "▸"}</span>
+                        <span onClick={() => toggleUserDrill(email, "calc")} style={{ background: isCalcOpen ? "rgba(232,162,48,.25)" : "rgba(232,162,48,.12)", color: S.amber, padding: "2px 6px", borderRadius: 4, cursor: "pointer", border: "1px solid " + (isCalcOpen ? S.amber : "rgba(232,162,48,.25)") }}>{u.calcUses} calc {isCalcOpen ? "▾" : "▸"}</span>
+                      </div>
+                    </div>
+                    {anyOpen && (() => {
+                      const items = getUserDrillItems(email, expandedUser.type);
+                      const typeColor = expandedUser.type === "login" ? S.green : expandedUser.type === "search" ? S.blue : S.amber;
+                      const typeLabel = expandedUser.type === "login" ? "Logins" : expandedUser.type === "search" ? "Searches" : "Calculator Activity";
+                      return (
+                        <div style={{ background: S.inputBg, borderRadius: 8, padding: "8px 10px", marginTop: 4, border: "1px solid " + typeColor + "30" }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: typeColor, textTransform: "uppercase", letterSpacing: .5, marginBottom: 6 }}>{typeLabel} — {items.length} events</div>
+                          {items.length === 0 && <div style={{ color: S.muted, fontSize: 11 }}>No data</div>}
+                          {items.slice(0, 50).map(r => renderDrillItem(r))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                );
+              })}
+              {data.userList.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No activity yet</div>}
+            </div>
+          </div>
+
+          {/* TOP SEARCHES */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🔍 Top Searches</div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.topSearches.map(([term, count]) => (
+                <div key={term} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                  <span style={{ fontWeight: 500 }}>{term}</span>
+                  <span style={{ color: S.muted }}>{count}x</span>
+                </div>
+              ))}
+              {data.topSearches.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No searches yet</div>}
+            </div>
+          </div>
+
+          {/* POPULAR CALC PRODUCTS */}
+          {data.topVA.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🚀 Most Toggled Value-Add Products</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topVA.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.amber }}>{count} toggles</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* RECENT SESSIONS */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🕐 Recent Sessions</div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.sessionList.map((s, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{s.user}</div>
+                    <div style={{ color: S.muted, fontSize: 10 }}>{new Date(s.start).toLocaleDateString()} {new Date(s.start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ color: S.green, fontWeight: 600 }}>{s.durationMin}+ min</div>
+                    <div style={{ color: S.muted, fontSize: 10 }}>{s.events} events</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// ═══ BLEND PROFITABILITY CALCULATOR ═══
+const COMMODITIES = {
+  uan28:  { name: "28% UAN",        weight: 10.60 },
+  uan32:  { name: "32% UAN",        weight: 11.06 },
+  "1034": { name: "10-34-0 (APP)",  weight: 11.65 },
+  ats:    { name: "12-0-0-26S (ATS)", weight: 11.06 },
+  "411":  { name: "4-11-11",        weight: 10.80 },
+  custom: { name: "Custom Blend",   weight: 0 }
+};
+
+const VA_PRODUCT_DEFS = [
+  { matchName: "NDURE 2.0",              label: "NDURE 2.0",              cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 1, rateMax: 2, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA" },
+  { matchName: "NDURE DCD 25",           label: "NDURE DCD 25",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "250 GA" },
+  { matchName: "NDURE TRIPLE",           label: "NDURE TRIPLE",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA" },
+  { matchName: "FOLI-GRO KILO 0-0-24",  label: "FOLI-GRO KILO",         cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK" },
+  { matchName: "TILL-IT KILOWATT",       label: "TILL-IT KILOWATT",       cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK" },
+  { matchName: "TILL-IT DUO ZINC 9%",    label: "TILL-IT DUO ZINC 9%",    cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "TILL-IT 9% ZINC EDTA",   label: "TILL-IT 9% ZINC EDTA",   cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "PURIC PRIME",            label: "PURIC PRIME",            cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "PURIC FC",               label: "PURIC FC",               cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "275 GA" },
+  { matchName: "NUTRIO UNLOCK",          label: "NUTRIO UNLOCK",          cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "NUTRIO N-TUNE",          label: "NUTRIO N-TUNE",          cat: "N-Fixing Biological",  rateUnit: "qt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "VERSATILE IRON",         label: "VERSATILE IRON",         cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "VERSATILE AGRA-MIX II",  label: "VERSATILE AGRA-MIX II",  cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 3, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA" },
+];
+
+function BlendCalculator({ profile, district, location, txData, overridesMap, hideCost, locations }) {
+  const [fertProduct, setFertProduct] = useState("");
+  const [customName, setCustomName] = useState("");
+  const [weightPerGal, setWeightPerGal] = useState("");
+  const [costPerTon, setCostPerTon] = useState("");
+  const [sellPerTon, setSellPerTon] = useState("");
+  const [loadSize, setLoadSize] = useState("4500");
+  const [carrierGPA, setCarrierGPA] = useState("");
+  const [activeVA, setActiveVA] = useState({});
+  const [vaRates, setVaRates] = useState({});
+  const [vaPrices, setVaPrices] = useState({});
+
+  // Resolve value-add product pricing from txData using the same resolvePrice logic
+  const vaProducts = useMemo(() => {
+    return VA_PRODUCT_DEFS.map(def => {
+      // Find matching SKUs in txData
+      const matches = txData.filter(p => p.name === def.matchName);
+      // Prefer the bulk/270 GA SKU
+      let sku = matches.find(p => p.pkg && p.pkg.toUpperCase().indexOf(def.preferPkg) !== -1);
+      if (!sku) sku = matches.find(p => p.pkg && /270|250|275|BULK/i.test(p.pkg));
+      if (!sku && matches.length > 0) sku = matches[0];
+      if (!sku) return null;
+
+      const resolved = resolvePrice(sku, district, location, overridesMap);
+      const cost = sku.cost;
+      const floor = resolved.floor;
+      const target = resolved.target;
+
+      if (target == null && floor == null) return null;
+
+      return {
+        ...def,
+        item: sku.item,
+        cost: cost || 0,
+        floor: floor || target,
+        target: target || floor,
+        sku
+      };
+    }).filter(Boolean);
+  }, [txData, district, location, overridesMap]);
+
+  const onProductChange = (val) => {
+    setFertProduct(val);
+    if (val) Analytics.track("calc_commodity", { product: val });
+    if (val && val !== "custom" && COMMODITIES[val]) {
+      setWeightPerGal(String(COMMODITIES[val].weight));
+    } else if (val === "custom") {
+      setWeightPerGal("");
+    } else {
+      setWeightPerGal("");
+    }
+  };
+
+  // Calculations
+  const cost = parseFloat(costPerTon) || 0;
+  const sell = parseFloat(sellPerTon) || 0;
+  const loadGal = parseFloat(loadSize) || 4500;
+  const weight = parseFloat(weightPerGal) || 0;
+  const gpa = parseFloat(carrierGPA) || 0;
+
+  const loadWeightLbs = weight * loadGal;
+  const loadWeightTons = loadWeightLbs / 2000;
+  const marginPerTon = sell - cost;
+  const marginPct = sell > 0 ? (marginPerTon / sell * 100) : 0;
+  const commodityProfit = marginPerTon * loadWeightTons;
+  const acresPerLoad = gpa > 0 ? (loadGal / gpa) : 0;
+
+  const hasInputs = cost > 0 || sell > 0;
+
+  // Value-add calculations
+  const vaCalcs = vaProducts.map(p => {
+    if (!activeVA[p.matchName]) return { ...p, active: false, usageGal: 0, profit: 0, explanation: "" };
+    const rate = vaRates[p.matchName] !== undefined ? vaRates[p.matchName] : p.defaultRate;
+    const sellPrice = vaPrices[p.matchName] !== undefined ? vaPrices[p.matchName] : p.target;
+    const profitPerGal = sellPrice - p.cost;
+
+    let usageGal = 0, profit = 0, explanation = "";
+    if (p.isNTreatment) {
+      if (loadWeightTons > 0) {
+        const totalQts = loadWeightTons * rate;
+        usageGal = totalQts / 4;
+        profit = usageGal * profitPerGal;
+        explanation = totalQts.toFixed(1) + " qt · " + usageGal.toFixed(2) + " gal · " + loadWeightTons.toFixed(1) + " ton load";
+      }
+    } else {
+      if (acresPerLoad > 0) {
+        let qtsPerAcre = rate;
+        if (p.rateUnit === "pt/ac") qtsPerAcre = rate / 2;
+        const totalQts = acresPerLoad * qtsPerAcre;
+        usageGal = totalQts / 4;
+        profit = usageGal * profitPerGal;
+        explanation = totalQts.toFixed(1) + " qt · " + usageGal.toFixed(2) + " gal · " + acresPerLoad.toFixed(1) + " ac @ " + gpa + " GPA";
+      } else {
+        explanation = "Enter GPA to calculate";
+      }
+    }
+    return { ...p, active: true, usageGal, profit, explanation, sellPrice, rate };
+  });
+
+  const totalVAProfit = vaCalcs.filter(v => v.active).reduce((sum, v) => sum + v.profit, 0);
+  const totalProfit = commodityProfit + totalVAProfit;
+
+  const profitColor = totalProfit >= 1000 ? S.green : totalProfit >= 700 ? S.amber : "#ef4444";
+  const profitGlow = totalProfit >= 1000 ? "rgba(76,175,106,.15)" : totalProfit >= 700 ? "rgba(232,162,48,.15)" : "rgba(239,68,68,.15)";
+  const profitStatus = totalProfit <= 0 ? "Enter cost & sell price above" : totalProfit < 700 ? "⚠️ Below minimum — add value products!" : totalProfit < 1000 ? "🟡 Getting there — push it higher!" : "✅ Strong profit per load!";
+  const barPct = Math.min(totalProfit / 1500 * 100, 100);
+
+  const fmtD = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const inputStyle = { width: "100%", padding: "10px 12px", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 15, outline: "none", boxSizing: "border-box" };
+  const labelStyle = { display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 5 };
+  const sectionStyle = { background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" };
+  const sectionHeaderStyle = { padding: "12px 14px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid " + S.border };
+
+  return (
+    <div style={{ padding: "10px 12px 100px" }}>
+
+      {/* COMMODITY */}
+      <div style={sectionStyle}>
+        <div style={sectionHeaderStyle}>⛽ Commodity Fertilizer</div>
+        <div style={{ padding: "12px 14px" }}>
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>Fertilizer Product</label>
+            <select value={fertProduct} onChange={e => onProductChange(e.target.value)}
+              style={{ ...inputStyle, WebkitAppearance: "none", paddingRight: 32, backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b8a6e'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center" }}>
+              <option value="">— Select Product —</option>
+              {Object.entries(COMMODITIES).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
+            </select>
+          </div>
+
+          {fertProduct === "custom" && (
+            <div style={{ marginBottom: 12 }}>
+              <label style={labelStyle}>Custom Blend Name</label>
+              <input type="text" value={customName} onChange={e => setCustomName(e.target.value)} placeholder="e.g. 20-10-5" style={inputStyle} />
+            </div>
+          )}
+
+          <div style={{ marginBottom: 12 }}>
+            <label style={labelStyle}>Weight (lb/gal)</label>
+            <input type="number" value={weightPerGal} onChange={e => setWeightPerGal(e.target.value)} step="0.01" placeholder="Auto-filled or enter manually" style={inputStyle} />
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Your Cost ($/ton)</label>
+              <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Sell Price ($/ton)</label>
+              <input type="number" value={sellPerTon} onChange={e => setSellPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label style={labelStyle}>Load Size (gallons)</label>
+              <input type="number" value={loadSize} onChange={e => setLoadSize(e.target.value)} step="100" style={inputStyle} />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label style={{ ...labelStyle, color: gpa > 0 ? S.muted : S.amber }}>Application Rate (GPA){gpa <= 0 ? " — REQUIRED" : ""}</label>
+              <input type="number" value={carrierGPA} onChange={e => setCarrierGPA(e.target.value)} step="0.5" placeholder="⚠ Enter gal/ac"
+                style={{ ...inputStyle, borderColor: gpa > 0 ? S.border : S.amber, boxShadow: gpa > 0 ? "none" : "0 0 10px rgba(232,162,48,.25)" }} />
+              {gpa <= 0 && <div style={{ fontSize: 10, color: S.amber, marginTop: 4, fontWeight: 600 }}>↑ Required for value-add calculations</div>}
+            </div>
+          </div>
+
+          {hasInputs && (
+            <div style={{ background: S.inputBg, borderRadius: 10, padding: 12, border: "1px solid " + S.border }}>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>Margin per Ton</span>
+                <span style={{ fontWeight: 700, color: marginPerTon > 0 ? S.green : "#ef4444" }}>${fmtD(marginPerTon)}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>Margin %</span>
+                <span style={{ fontWeight: 700, color: marginPct > 5 ? S.green : marginPct > 0 ? S.amber : "#ef4444" }}>{marginPct.toFixed(1)}%</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>Load Weight</span>
+                <span style={{ fontWeight: 600 }}>{weight > 0 ? (loadWeightLbs.toLocaleString() + " lbs") : "—"}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>Tons / Load</span>
+                <span style={{ fontWeight: 600 }}>{weight > 0 ? loadWeightTons.toFixed(2) + " tons" : "—"}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "4px 0", fontSize: 12 }}>
+                <span style={{ color: S.muted }}>Acres / Load</span>
+                <span style={{ fontWeight: 600 }}>{acresPerLoad > 0 ? acresPerLoad.toFixed(1) + " acres" : "— enter GPA"}</span>
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", fontSize: 14, borderTop: "1px solid " + S.border, marginTop: 4 }}>
+                <span style={{ color: S.muted, fontWeight: 600 }}>Commodity Profit / Load</span>
+                <span style={{ fontWeight: 800, fontSize: 17, color: profitColor }}>${fmtD(commodityProfit)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* VALUE-ADD PRODUCTS */}
+      <div style={sectionStyle}>
+        <div style={sectionHeaderStyle}>🚀 Value-Add Products</div>
+        <div style={{ padding: "8px 14px 14px" }}>
+          <div style={{ fontSize: 11, color: S.muted, background: S.inputBg, padding: "8px 10px", borderRadius: 6, marginBottom: 10, lineHeight: 1.5 }}>
+            Toggle products ON to add to the blend. Slide price between floor and target. Profit is added on top of your commodity margin.
+          </div>
+          {vaProducts.map(p => {
+            const isActive = activeVA[p.matchName] || false;
+            const calc = vaCalcs.find(v => v.matchName === p.matchName);
+            const currentPrice = vaPrices[p.matchName] !== undefined ? vaPrices[p.matchName] : p.target;
+            const currentRate = vaRates[p.matchName] !== undefined ? vaRates[p.matchName] : p.defaultRate;
+            const sliderPct = p.target !== p.floor ? (currentPrice - p.floor) / (p.target - p.floor) : 1;
+
+            return (
+              <div key={p.matchName} style={{ background: S.inputBg, border: "1px solid " + (isActive ? S.green : S.border), borderRadius: 10, marginBottom: 8, overflow: "hidden", transition: "border-color .2s" }}>
+                <div onClick={() => { setActiveVA(prev => { const next = { ...prev, [p.matchName]: !prev[p.matchName] }; Analytics.track("calc_toggle_va", { product: p.matchName, enabled: !prev[p.matchName] }); return next; }); }}
+                  style={{ display: "flex", alignItems: "center", padding: "11px 12px", gap: 10, cursor: "pointer", userSelect: "none" }}>
+                  <div style={{ width: 38, height: 21, borderRadius: 11, background: isActive ? S.green : S.border, position: "relative", flexShrink: 0, transition: "background .2s" }}>
+                    <div style={{ width: 17, height: 17, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: isActive ? 19 : 2, transition: "left .2s" }} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>{p.label}</div>
+                    <div style={{ fontSize: 10, color: S.muted }}>{p.cat} · {p.rateUnit}</div>
+                  </div>
+                  {isActive && calc && calc.profit > 0 && (
+                    <div style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: calc.profit >= 100 ? "rgba(76,175,106,.12)" : "rgba(232,162,48,.12)", color: calc.profit >= 100 ? S.green : S.amber }}>
+                      +${calc.profit.toFixed(0)}
+                    </div>
+                  )}
+                </div>
+
+                {isActive && (
+                  <div style={{ padding: "0 12px 12px", borderTop: "1px solid " + S.border, paddingTop: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+                      <span style={{ color: S.muted }}>Sell Price ($/gal)</span>
+                      <span style={{ fontWeight: 700, color: sliderPct > 0.5 ? S.green : S.amber }}>${currentPrice.toFixed(2)}</span>
+                    </div>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: S.muted, marginBottom: 2 }}>
+                      <span style={{ color: S.amber }}>Floor ${p.floor.toFixed(2)}</span>
+                      <span style={{ color: S.green }}>Target ${p.target.toFixed(2)}</span>
+                    </div>
+                    <input type="range" min={p.floor} max={p.target} step="0.01" value={currentPrice}
+                      onChange={e => setVaPrices(prev => ({ ...prev, [p.matchName]: parseFloat(e.target.value) }))}
+                      style={{ width: "100%", WebkitAppearance: "none", height: 6, borderRadius: 3, background: "linear-gradient(to right, " + S.amber + ", " + S.green + ")", outline: "none", marginBottom: 8 }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, marginBottom: 6 }}>
+                      <span style={{ color: S.muted }}>Rate ({p.rateUnit})</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input type="number" value={currentRate} min={p.rateMin} max={p.rateMax} step="0.5"
+                          onChange={e => setVaRates(prev => ({ ...prev, [p.matchName]: parseFloat(e.target.value) || 0 }))}
+                          onClick={e => e.stopPropagation()}
+                          style={{ width: 55, padding: "4px 6px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 13, textAlign: "center", outline: "none" }} />
+                        <span style={{ fontSize: 10, color: S.muted }}>({p.rateMin}-{p.rateMax})</span>
+                      </span>
+                    </div>
+                    {calc && (
+                      <React.Fragment>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
+                          <span style={{ color: S.muted }}>Gallons into Load</span>
+                          <span style={{ fontWeight: 600, color: S.blue }}>{calc.usageGal.toFixed(2)} gal</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
+                          <span style={{ color: S.muted }}>Profit Added / Load</span>
+                          <span style={{ fontWeight: 700, color: calc.profit >= 100 ? S.green : S.amber }}>+${fmtD(calc.profit)}</span>
+                        </div>
+                      </React.Fragment>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* TOTAL PROFITABILITY METER */}
+      <div style={{ background: S.card, border: "1px solid " + profitColor + "60", borderRadius: 12, padding: "20px 16px", textAlign: "center", boxShadow: "0 0 30px " + profitGlow + ", inset 0 0 30px " + profitGlow, marginBottom: 10, backgroundImage: "linear-gradient(180deg, " + profitGlow + " 0%, " + S.card + " 100%)" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 6 }}>Total Profit Per Load</div>
+        <div style={{ fontSize: 40, fontWeight: 800, letterSpacing: -1, color: profitColor }}>${fmtD(totalProfit)}</div>
+        <div style={{ fontSize: 12, color: S.muted, marginTop: 4 }}>{profitStatus}</div>
+        <div style={{ height: 12, borderRadius: 6, background: S.inputBg, marginTop: 14, overflow: "hidden" }}>
+          <div style={{ height: "100%", borderRadius: 6, width: barPct + "%", background: profitColor, transition: "width .4s, background .3s", minWidth: totalProfit > 0 ? "4%" : "0%" }} />
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 9, color: S.muted }}>
+          <span>$0</span><span style={{ marginLeft: "25%" }}>$700</span><span style={{ marginLeft: "auto" }}>$1,000</span><span>$1,500+</span>
+        </div>
+      </div>
+
+      {/* BREAKDOWN TABLE */}
+      {hasInputs && (
+        <div style={sectionStyle}>
+          <div style={sectionHeaderStyle}>📊 Profit Breakdown</div>
+          <div style={{ padding: "8px 14px 14px" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>Product</th>
+                  <th style={{ textAlign: "right", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>$/Load</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: "8px 4px", fontWeight: 500, borderBottom: "1px solid " + S.border + "60" }}>Commodity Fertilizer</td>
+                  <td style={{ padding: "8px 4px", fontWeight: 700, textAlign: "right", color: commodityProfit >= 0 ? S.green : "#ef4444", borderBottom: "1px solid " + S.border + "60" }}>${fmtD(commodityProfit)}</td>
+                </tr>
+                {vaCalcs.filter(v => v.active).map(v => (
+                  <tr key={v.matchName}>
+                    <td style={{ padding: "8px 4px", fontWeight: 500, borderBottom: "1px solid " + S.border + "60" }}>{v.label}<br/><span style={{ fontSize: 10, color: S.muted }}>{v.usageGal.toFixed(2)} gal into load</span></td>
+                    <td style={{ padding: "8px 4px", fontWeight: 700, textAlign: "right", color: S.green, borderBottom: "1px solid " + S.border + "60" }}>+${fmtD(v.profit)}</td>
+                  </tr>
+                ))}
+                <tr>
+                  <td style={{ padding: "10px 4px", fontWeight: 800, borderTop: "2px solid " + S.border }}>TOTAL</td>
+                  <td style={{ padding: "10px 4px", fontWeight: 800, textAlign: "right", fontSize: 15, color: profitColor, borderTop: "2px solid " + S.border }}>${fmtD(totalProfit)}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ═══ MAIN APP ═══
 function App() {
@@ -635,6 +1621,7 @@ function App() {
   const [search, setSearch] = useState("");
   const [view, setView] = useState("tx");
   const [catFilter, setCatFilter] = useState("ALL");
+  const [appMode, setAppMode] = useState("prices");
   const searchRef = useRef(null);
 
   useEffect(() => {
@@ -671,6 +1658,8 @@ function App() {
           return;
         }
         setProfile(prof);
+        Analytics.setUser(prof, session.user.email);
+        Analytics.track("login", { role: prof.role, district: prof.district });
 
         const { data: tx } = await supabase.from("v_tx_pricing").select("*").order("name");
         setTxData(tx || []);
@@ -886,32 +1875,44 @@ function App() {
       <header style={{ background: S.headerBg, borderBottom: "2px solid " + S.greenDim, padding: "12px 14px 8px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: S.green, letterSpacing: .5, textTransform: "uppercase" }}>📋 Price Lookup</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: appMode === "calc" ? S.amber : appMode === "analytics" ? S.purple : S.green, letterSpacing: .5, textTransform: "uppercase" }}>{appMode === "calc" ? "⚡ Blend Calculator" : appMode === "analytics" ? "📊 Analytics" : "📋 Price Lookup"}</div>
             <div style={{ fontSize: 10, color: S.muted, letterSpacing: 2, textTransform: "uppercase", marginTop: 1 }}>2026 TX Branded · Wilbur-Ellis{isAdmin ? "" : " · " + districtLabel}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {profile.role === "admin" && (
+              <button onClick={() => { setAppMode(appMode === "analytics" ? "prices" : "analytics"); }}
+                style={{ fontSize: 10, fontWeight: 700, color: appMode === "analytics" ? "#0f1410" : S.purple, background: appMode === "analytics" ? S.purple : "rgba(176,125,232,.1)", border: "1px solid " + (appMode === "analytics" ? S.purple : "rgba(176,125,232,.3)"), padding: "4px 8px", borderRadius: 6, cursor: "pointer", letterSpacing: .5 }}>
+                📊
+              </button>
+            )}
+            <button onClick={() => { const next = appMode === "prices" ? "calc" : "prices"; setAppMode(next); Analytics.track("page_view", { mode: next }); }}
+              style={{ fontSize: 10, fontWeight: 700, color: appMode === "calc" ? "#0f1410" : S.amber, background: appMode === "calc" ? S.amber : "rgba(232,162,48,.1)", border: "1px solid " + (appMode === "calc" ? S.amber : "rgba(232,162,48,.3)"), padding: "4px 10px", borderRadius: 6, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, letterSpacing: .5, transition: "all .2s" }}>
+              {appMode === "calc" ? "📋 PRICES" : "⚡ CALC"}
+            </button>
             <span style={{ fontSize: 10, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "3px 8px", borderRadius: 4 }}>{txData.length + " TX + " + natData.length + " Nat"}</span>
             <button onClick={handleLogout} style={{ fontSize: 10, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "3px 8px", borderRadius: 4, cursor: "pointer" }}>Logout</button>
           </div>
         </div>
+        {appMode === "prices" && (<React.Fragment>
         <div style={{ position: "relative" }}>
-          <input ref={searchRef} type="search" placeholder="Search product or item #..." value={search} onChange={e => setSearch(e.target.value)}
+          <input ref={searchRef} type="search" placeholder="Search product or item #..." value={search} onChange={e => { setSearch(e.target.value); if (e.target.value.length >= 3) Analytics.trackSearch(e.target.value); }}
             style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 16, padding: "9px 36px 9px 12px", outline: "none", boxSizing: "border-box" }} />
           {search && <button onClick={() => { setSearch(""); searchRef.current?.focus(); }} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: S.muted, fontSize: 16, cursor: "pointer" }}>✕</button>}
         </div>
         <div style={{ overflowX: "auto", scrollbarWidth: "none", marginTop: 8 }}>
           <div style={{ display: "flex", borderBottom: "1px solid " + S.border, minWidth: "max-content" }}>
             {tabs.map(t => (
-              <div key={t.key} onClick={() => { setView(t.key); setCatFilter("ALL"); }}
+              <div key={t.key} onClick={() => { setView(t.key); setCatFilter("ALL"); Analytics.track("page_view", { tab: t.key }); }}
                 style={{ fontSize: 11, color: view === t.key ? (t.color || S.green) : S.muted, padding: "6px 14px", cursor: "pointer", borderBottom: "2px solid " + (view === t.key ? (t.color || S.green) : "transparent"), whiteSpace: "nowrap", letterSpacing: .5, textTransform: "uppercase", userSelect: "none" }}>
                 {t.label}
               </div>
             ))}
           </div>
         </div>
+        </React.Fragment>)}
       </header>
 
-      {!(isAdmin && view === "all") && (
+      {appMode === "prices" && !(isAdmin && view === "all") && (
         <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "8px 14px 2px", scrollbarWidth: "none" }}>
           {pills.map(c => (
             <button key={c} onClick={() => setCatFilter(c)}
@@ -922,10 +1923,20 @@ function App() {
         </div>
       )}
 
+      {appMode === "prices" && (
       <div style={{ padding: "6px 12px 80px" }}>
         <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "5px 0 6px" }}>{countText}</div>
         {content}
       </div>
+      )}
+
+      {appMode === "calc" && (
+        <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} />
+      )}
+
+      {appMode === "analytics" && (
+        <AnalyticsDashboard />
+      )}
     </div>
   );
 }
