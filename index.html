@@ -103,10 +103,13 @@ const S = {
 function fmt(v) { if (v === null || v === undefined || typeof v !== "number") return "—"; return "$" + v.toFixed(v < 2 ? 3 : 2); }
 function fmtAc(v) { return "$" + v.toFixed(2) + "/ac"; }
 
-function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice) {
+function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice, ozPerUnit) {
   if (!price || rateMin == null || !rateUnit) return null;
   const u = rateUnit.toLowerCase(); const per100 = u.indexOf("/100") !== -1;
-  if (dryOzPrice) return { val: price * rateMin, per100: false };
+  if (dryOzPrice) {
+    const divisor = ozPerUnit != null ? ozPerUnit : 1;
+    return { val: price * (rateMin / divisor), per100: false };
+  }
   const isDry = pkg && /\d+\s*LB/i.test(pkg);
   if (isDry) { if (u.indexOf("lb") !== -1) return { val: price * rateMin, per100: false }; if (u.indexOf("oz") !== -1) return { val: (price / 16) * rateMin, per100: false }; return null; }
   const upg = u.indexOf("qt") !== -1 ? 4 : u.indexOf("pt") !== -1 ? 8 : u.indexOf("gal") !== -1 ? 1 : 128;
@@ -223,7 +226,7 @@ function InfoModal({ name, productInfo, onClose }) {
 }
 
 // ═══ PRODUCT CARD ═══
-function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls }) {
+function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite, priceHistoryMap }) {
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [useFloor, setUseFloor] = useState(false);
@@ -231,6 +234,10 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   const [customUreaRate, setCustomUreaRate] = useState(null);
   const [customNh3Rate, setCustomNh3Rate] = useState(null);
   const [customGPA, setCustomGPA] = useState(10);
+  const [showBidCalc, setShowBidCalc] = useState(false);
+  const [bidPrice, setBidPrice] = useState(null);
+  const [bidMargin, setBidMargin] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
   const isOrg = organicNames.has(p.name);
   const effectiveRate = customRate != null ? customRate : p.rate_min;
 
@@ -282,7 +289,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         </div>
       );
     } else {
-      const ppa = calcPPA(p.pkg, price, effectiveRate, p.rate_unit, customGPA, p.dry_oz_price);
+      const ppa = calcPPA(p.pkg, price, effectiveRate, p.rate_unit, customGPA, p.dry_oz_price, p.oz_per_unit);
       if (!ppa) return null;
       return (
         <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
@@ -346,11 +353,15 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     return (<React.Fragment>
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
         <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
-          <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
-            <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
+            <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div>
+            {priceHistoryMap && priceHistoryMap[String(p.item)] && <div style={{ fontSize: 9, color: S.blue, marginTop: 3 }}>📅 {(() => { const d = new Date(priceHistoryMap[String(p.item)].lastDate); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); })()}</div>}
+          </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {isOrg && <span style={{ display: "inline-flex", background: "rgba(74,222,128,.13)", border: "1px solid rgba(74,222,128,.35)", color: "#4ade80", borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 800 }}>◆ ORGANIC</span>}
             {p.cat && <span style={{ fontSize: 9, color: S.green, background: "rgba(76,175,106,.1)", border: "1px solid rgba(76,175,106,.2)", padding: "2px 6px", borderRadius: 4 }}>{p.cat}</span>}
+            {!isNational && onToggleFavorite && <span onClick={e => { e.stopPropagation(); onToggleFavorite(p.item); }} style={{ fontSize: 18, cursor: "pointer", color: favorites && favorites.has(p.item) ? "#f59e0b" : S.muted, lineHeight: 1, padding: "2px 2px" }}>{ favorites && favorites.has(p.item) ? "★" : "☆"}</span>}
             <span style={{ fontSize: 15, color: S.muted, transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>⌄</span>
           </div>
         </div>
@@ -373,12 +384,68 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               </div>}
               {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
             </div>
-            {renderPPA(adminPrice, adminPriceLabel)}
+            {renderPPA(bidPrice != null ? bidPrice : adminPrice, bidPrice != null ? "Bid Price" : adminPriceLabel)}
             {(rateStr || p.rate_note) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span></div>}
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
               <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              {p.cost != null && <button onClick={e => { e.stopPropagation(); setShowBidCalc(v => !v); if (showBidCalc) { setBidPrice(null); setBidMargin(null); } }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showBidCalc ? "rgba(232,162,48,.25)" : "rgba(232,162,48,.1)", border: "1px solid " + (showBidCalc ? "rgba(232,162,48,.6)" : "rgba(232,162,48,.3)"), color: S.amber, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🧮 Bid Calc</button>}
+              {priceHistoryMap && priceHistoryMap[String(p.item)] && <button onClick={e => { e.stopPropagation(); setShowHistory(v => !v); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>}
             </div>
+            {showBidCalc && p.cost != null && (() => {
+              const cost = p.cost;
+              const displayPrice = bidPrice != null ? bidPrice : (adminPrice || 0);
+              const displayMargin = bidMargin != null ? bidMargin : (adminPrice != null ? (((adminPrice - cost) / adminPrice) * 100).toFixed(1) : "");
+              return (
+                <div style={{ background: "rgba(232,162,48,.06)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+                  <div style={{ fontSize: 9, color: S.amber, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>🧮 Bid Calculator — Temp Only</span>
+                    <span onClick={e => { e.stopPropagation(); setBidPrice(null); setBidMargin(null); }} style={{ fontSize: 9, color: S.muted, cursor: "pointer", textDecoration: "underline", textTransform: "none" }}>reset</span>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>Bid Price</div>
+                      <input type="number" step="0.01" value={bidPrice != null ? bidPrice : displayPrice} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const v = parseFloat(e.target.value); if (!isNaN(v) && v > 0) { setBidPrice(v); setBidMargin((((v - cost) / v) * 100).toFixed(1)); } else { setBidPrice(null); setBidMargin(null); } }} style={{ width: "100%", background: "#1a2a1c", border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>Margin %</div>
+                      <input type="number" step="0.1" value={bidMargin != null ? bidMargin : displayMargin} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const m = parseFloat(e.target.value); if (!isNaN(m) && m < 100) { setBidMargin(e.target.value); const derived = cost / (1 - m / 100); setBidPrice(Math.round(derived * 100) / 100); } else { setBidMargin(null); setBidPrice(null); } }} style={{ width: "100%", background: "#1a2a1c", border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
+                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Cost</div><div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>{fmt(cost)}</div></div>
+                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Margin $</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice || adminPrice || 0) - cost >= 0 ? S.green : "#ef4444" }}>{fmt((bidPrice != null ? bidPrice : (adminPrice || 0)) - cost)}</div></div>
+                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>vs Floor</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? p.e_floor : p.w_floor) ? S.green : "#ef4444" }}>{(bidPrice != null ? bidPrice : adminPrice) != null && (p.w_floor || p.e_floor) ? ((bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? p.e_floor : p.w_floor) ? "✓ Above" : "✗ Below") : "—"}</div></div>
+                  </div>
+                </div>
+              );
+            })()}
+            {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
+              const hist = priceHistoryMap[String(p.item)];
+              function fmtField(f) { return f === "floor_price" ? "Floor" : f === "target_price" ? "Target" : f === "nat_target" ? "Nat Target" : f; }
+              function fmtHistDate(ts) { const d = new Date(ts); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
+              return (
+                <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Price History</div>
+                  {hist.entries.map((e, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
+                      <div>
+                        <span style={{ color: S.blue, fontWeight: 600 }}>{fmtField(e.field_name)}</span>
+                        {e.district_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.district_id.toUpperCase()}</span>}
+                        {e.location_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.location_id}</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ color: S.muted, textDecoration: "line-through", fontSize: 11 }}>{e.old_value != null ? fmt(e.old_value) : "—"}</span>
+                        <span style={{ color: S.text, fontSize: 9 }}>→</span>
+                        <span style={{ color: S.green, fontWeight: 700 }}>{e.new_value != null ? fmt(e.new_value) : "—"}</span>
+                        <span style={{ color: S.muted, fontSize: 9, minWidth: 80, textAlign: "right" }}>{fmtHistDate(e.changed_at)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {hist.entries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No history found</div>}
+                </div>
+              );
+            })()}
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item} · {p.pkg} {p.uom || ""}</div>
           </div>
         )}
@@ -425,7 +492,34 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
               <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
+              {priceHistoryMap && priceHistoryMap[String(p.item)] && <button onClick={e => { e.stopPropagation(); setShowHistory(v => !v); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>}
             </div>
+            {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
+              const hist = priceHistoryMap[String(p.item)];
+              function fmtField(f) { return f === "floor_price" ? "Floor" : f === "target_price" ? "Target" : f === "nat_target" ? "Nat Target" : f; }
+              function fmtHistDate(ts) { const d = new Date(ts); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
+              return (
+                <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
+                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Price History</div>
+                  {hist.entries.map((e, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
+                      <div>
+                        <span style={{ color: S.blue, fontWeight: 600 }}>{fmtField(e.field_name)}</span>
+                        {e.district_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.district_id.toUpperCase()}</span>}
+                        {e.location_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.location_id}</span>}
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        <span style={{ color: S.muted, textDecoration: "line-through", fontSize: 11 }}>{e.old_value != null ? fmt(e.old_value) : "—"}</span>
+                        <span style={{ color: S.text, fontSize: 9 }}>→</span>
+                        <span style={{ color: S.green, fontWeight: 700 }}>{e.new_value != null ? fmt(e.new_value) : "—"}</span>
+                        <span style={{ color: S.muted, fontSize: 9, minWidth: 80, textAlign: "right" }}>{fmtHistDate(e.changed_at)}</span>
+                      </div>
+                    </div>
+                  ))}
+                  {hist.entries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No history found</div>}
+                </div>
+              );
+            })()}
             <div style={{ fontSize: 10, color: S.border, marginTop: 7 }}>ITEM # {p.item}</div>
           </div>
         )}
@@ -549,7 +643,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         </div>
       );
     } else {
-      const ppa = calcPPA(p.pkg, activePrice, p.rate_min, p.rate_unit, 20, p.dry_oz_price);
+      const ppa = calcPPA(p.pkg, activePrice, p.rate_min, p.rate_unit, 20, p.dry_oz_price, p.oz_per_unit);
       if (ppa) {
         ppaSection = (
           <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
@@ -572,6 +666,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {isOrg && <span style={{ display: "inline-flex", background: "rgba(74,222,128,.13)", border: "1px solid rgba(74,222,128,.35)", color: "#4ade80", borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 800 }}>◆ ORGANIC</span>}
           {p.cat && <span style={{ fontSize: 9, color: accentColor, background: "rgba(76,175,106,.1)", border: "1px solid rgba(76,175,106,.2)", padding: "2px 6px", borderRadius: 4 }}>{p.cat}</span>}
+          {!isNational && onToggleFavorite && <span onClick={e => { e.stopPropagation(); onToggleFavorite(p.item); }} style={{ fontSize: 18, cursor: "pointer", color: favorites && favorites.has(p.item) ? "#f59e0b" : S.muted, lineHeight: 1, padding: "2px 2px" }}>{favorites && favorites.has(p.item) ? "★" : "☆"}</span>}
           <span style={{ fontSize: 15, color: S.muted, transform: open ? "rotate(180deg)" : "none", transition: "transform .2s" }}>⌄</span>
         </div>
       </div>
@@ -915,6 +1010,16 @@ function AnalyticsDashboard() {
       hourlyUsage[h]++;
     });
 
+    // Most favorited products (all-time, not time-filtered)
+    const { data: favRows } = await supabase.from("user_favorites").select("sku_item, skus(name)");
+    const favCounts = {};
+    (favRows || []).forEach(r => {
+      const name = r.skus?.name || ("Item #" + r.sku_item);
+      favCounts[name] = (favCounts[name] || 0) + 1;
+    });
+    const topFavorites = Object.entries(favCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const totalFavorites = (favRows || []).length;
+
     setData({
       totalEvents: rows.length, uniqueUsers, logins: logins.length,
       searches: searches.length, topSearches, calcViews, priceViews,
@@ -923,6 +1028,7 @@ function AnalyticsDashboard() {
       productViewCount: productViews.length, labelSearchCount: labelSearches.length, rateChangeCount: rateChanges.length,
       infoClickCount: infoClicks.length, topInfoClicks,
       timelineData, hourlyUsage,
+      topFavorites, totalFavorites,
       rawRows: rows
     });
     setLoading(false);
@@ -1130,6 +1236,23 @@ function AnalyticsDashboard() {
                 </div>
               ))}
               {data.topProductViews.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No card views yet</div>}
+            </div>
+          </div>
+
+          {/* MOST FAVORITED PRODUCTS */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>⭐ Most Favorited Products</span>
+              <span style={{ fontSize: 11, color: S.amber, fontWeight: 600 }}>{data.totalFavorites} total stars</span>
+            </div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.topFavorites.map(([name, count]) => (
+                <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                  <span style={{ fontWeight: 500 }}>{name}</span>
+                  <span style={{ color: S.amber }}>{"★".repeat(Math.min(count, 5))} {count} {count === 1 ? "rep" : "reps"}</span>
+                </div>
+              ))}
+              {data.topFavorites.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No favorites saved yet</div>}
             </div>
           </div>
 
@@ -1642,6 +1765,9 @@ function App() {
   const [appMode, setAppMode] = useState("prices");
   const searchRef = useRef(null);
 
+  const [favorites, setFavorites] = useState(new Set()); // Set of sku_item integers
+  const [priceHistoryMap, setPriceHistoryMap] = useState({}); // item -> { lastDate, entries[] }
+
   useEffect(() => {
     let subscription;
     async function init() {
@@ -1708,6 +1834,24 @@ function App() {
         (lu || []).forEach(l => { luMap[l.name] = l.url; });
         setLabelUrls(luMap);
 
+        const { data: favRows } = await supabase.from("user_favorites").select("sku_item").eq("user_id", session.user.id);
+        setFavorites(new Set((favRows || []).map(r => r.sku_item)));
+
+        // Preload price history for admin
+        if (prof?.role === "admin" || prof?.role === "viewer_admin") {
+          const { data: histRows } = await supabase
+            .from("price_history")
+            .select("sku_item, field_name, old_value, new_value, changed_at, district_id, location_id, table_name")
+            .order("changed_at", { ascending: false });
+          const hMap = {};
+          (histRows || []).forEach(r => {
+            const hKey = String(r.sku_item);
+            if (!hMap[hKey]) hMap[hKey] = { lastDate: r.changed_at, entries: [] };
+            hMap[hKey].entries.push(r);
+          });
+          setPriceHistoryMap(hMap);
+        }
+
         setView(prof?.role === "admin" || prof?.role === "viewer_admin" ? "tx" : "district");
       } catch (err) {
         console.error("Load error:", err);
@@ -1758,8 +1902,21 @@ function App() {
   const natOnlyProducts = useMemo(() => {
     if (!profile || profile.role === "admin" || profile.role === "viewer_admin") return [];
     const txItems = new Set(districtProducts.map(p => p.item));
-    return natData.filter(p => !txItems.has(p.item) && p.nat_target != null);
-  }, [profile, districtProducts, natData]);
+    const isSalesRep = profile.role !== "manager";
+    // For sales reps: hide any national product where a district SKU target exceeds national target
+    const hiddenNatNames = new Set();
+    if (isSalesRep) {
+      const dist = profile.district;
+      txData.forEach(p => {
+        const distTarget = dist === "wtx" ? p.w_target : p.e_target;
+        const natMatch = natData.find(n => n.name === p.name);
+        if (distTarget != null && natMatch?.nat_target != null && distTarget > natMatch.nat_target) {
+          hiddenNatNames.add(p.name);
+        }
+      });
+    }
+    return natData.filter(p => !txItems.has(p.item) && p.nat_target != null && !hiddenNatNames.has(p.name));
+  }, [profile, districtProducts, natData, txData]);
 
   const organicDistrict = useMemo(() => districtProducts.filter(p => organicNames.has(p.name)), [districtProducts, organicNames]);
   const organicNatOnly = useMemo(() => {
@@ -1825,16 +1982,31 @@ function App() {
   const tabs = isAdmin ? [
     { key: "tx", label: "TX Products" }, { key: "nat", label: "National Ref" },
     { key: "all", label: "All" }, { key: "organic", label: "◆ Organic", color: "#4ade80" },
+    { key: "favorites", label: "⭐ Favorites", color: "#f59e0b" },
   ] : [
     { key: "district", label: districtLabel + " Products" }, { key: "national", label: "National Ref" },
     { key: "organic", label: "◆ Organic", color: "#4ade80" },
+    { key: "favorites", label: "⭐ Favorites", color: "#f59e0b" },
   ];
 
   const pills = isAdmin
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
 
-  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations };
+  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite, priceHistoryMap };
+
+  async function toggleFavorite(item) {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    const isFav = favorites.has(item);
+    // Optimistic update
+    setFavorites(prev => { const n = new Set(prev); isFav ? n.delete(item) : n.add(item); return n; });
+    if (isFav) {
+      await supabase.from("user_favorites").delete().eq("user_id", userId).eq("sku_item", item);
+    } else {
+      await supabase.from("user_favorites").insert({ user_id: userId, sku_item: item });
+    }
+  }
 
   let content = null;
   let countText = "";
@@ -1866,6 +2038,13 @@ function App() {
         {natG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {natG.length} more</div>}
         {natG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} isNational={true} hideCost={hideCost} {...cardProps} />))}
       </React.Fragment>);
+    } else if (view === "favorites") {
+      const favItems = txData.filter(p => favorites.has(p.item));
+      const favGroups = groupByName(favItems);
+      countText = favGroups.length + " favorites · " + favItems.length + " SKUs";
+      content = favGroups.length > 0
+        ? favGroups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />))
+        : <div style={{ textAlign: "center", padding: "60px 20px", color: S.muted }}><div style={{ fontSize: 36, marginBottom: 12 }}>⭐</div><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No favorites yet</div><div style={{ fontSize: 12 }}>Tap the star on any product card to save it here</div></div>;
     }
   } else {
     if (view === "district") {
@@ -1885,6 +2064,13 @@ function App() {
         {nG.length > 0 && <div style={{ fontSize: 10, color: S.muted, letterSpacing: 1, textTransform: "uppercase", padding: "10px 2px 5px", borderTop: "1px solid " + S.border, marginTop: 4 }}>NATIONAL REF ONLY — {nG.length} more</div>}
         {nG.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} district={dist} location={loc} isNational={true} isManager={isManager} locationIds={locIds} {...cardProps} />))}
       </React.Fragment>);
+    } else if (view === "favorites") {
+      const favItems = districtProducts.filter(p => favorites.has(p.item));
+      const favGroups = groupByName(favItems);
+      countText = favGroups.length + " favorites · " + favItems.length + " SKUs";
+      content = favGroups.length > 0
+        ? favGroups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} district={dist} location={loc} isManager={isManager} locationIds={locIds} {...cardProps} />))
+        : <div style={{ textAlign: "center", padding: "60px 20px", color: S.muted }}><div style={{ fontSize: 36, marginBottom: 12 }}>⭐</div><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No favorites yet</div><div style={{ fontSize: 12 }}>Tap the star on any product card to save it here</div></div>;
     }
   }
 
