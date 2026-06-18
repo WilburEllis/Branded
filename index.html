@@ -49,7 +49,7 @@ const { useState, useEffect, useMemo, useRef, useCallback } = React;
 // ═══ SUPABASE CLIENT ═══
 const SUPABASE_URL = "https://gumpxdchfqatszeuldvm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bXB4ZGNoZnFhdHN6ZXVsZHZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5OTYyNzcsImV4cCI6MjA4ODU3MjI3N30.AtMh0jDDKctXupluF5fqThMb58xOUjlNoy1RTcwmxRQ";
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // ═══ ANALYTICS TRACKER ═══
 const Analytics = (() => {
@@ -67,7 +67,7 @@ const Analytics = (() => {
   function track(eventType, eventData) {
     if (!currentUser) return;
     try {
-      supabase.from("user_activity").insert({
+      supabaseClient.from("user_activity").insert({
         user_id: currentUser.id,
         user_email: currentUser.email,
         user_name: currentUser.name,
@@ -878,7 +878,7 @@ function AnalyticsDashboard() {
     const daysAgo = timeRange === "24h" ? 1 : timeRange === "7d" ? 7 : 30;
     const since = new Date(Date.now() - daysAgo * 86400000).toISOString();
 
-    const { data: rows, error } = await supabase
+    const { data: rows, error } = await supabaseClient
       .from("user_activity")
       .select("*")
       .gte("created_at", since)
@@ -1011,7 +1011,7 @@ function AnalyticsDashboard() {
     });
 
     // Most favorited products (all-time, not time-filtered)
-    const { data: favRows } = await supabase.from("user_favorites").select("sku_item, skus(name)");
+    const { data: favRows } = await supabaseClient.from("user_favorites").select("sku_item, skus(name)");
     const favCounts = {};
     (favRows || []).forEach(r => {
       const name = r.skus?.name || ("Item #" + r.sku_item);
@@ -1772,10 +1772,10 @@ function App() {
     let subscription;
     async function init() {
       try {
-        const { data: { session: s } } = await supabase.auth.getSession();
+        const { data: { session: s } } = await supabaseClient.auth.getSession();
         setSession(s);
         if (!s) setInitialLoading(false);
-        const { data: { subscription: sub } } = supabase.auth.onAuthStateChange((_event, s) => {
+        const { data: { subscription: sub } } = supabaseClient.auth.onAuthStateChange((_event, s) => {
           setSession(s);
           if (!s) { setProfile(null); setInitialLoading(false); }
         });
@@ -1794,7 +1794,7 @@ function App() {
     if (!session) return;
     async function loadAll() {
       try {
-        const { data: prof, error: profErr } = await supabase.from("profiles").select("*").eq("id", session.user.id).single();
+        const { data: prof, error: profErr } = await supabaseClient.from("profiles").select("*").eq("id", session.user.id).single();
         if (profErr) {
           console.error("Profile error:", profErr);
           setConnError("Logged in but no profile found for your user ID. You may need to add a row to the profiles table with id = " + session.user.id);
@@ -1805,41 +1805,41 @@ function App() {
         Analytics.setUser(prof, session.user.email);
         Analytics.track("login", { role: prof.role, district: prof.district });
 
-        const { data: tx } = await supabase.from("v_tx_pricing").select("*").order("name");
+        const { data: tx } = await supabaseClient.from("v_tx_pricing").select("*").order("name");
         setTxData(tx || []);
 
-        const { data: nat } = await supabase.from("national_prices").select("*").order("name");
+        const { data: nat } = await supabaseClient.from("national_prices").select("*").order("name");
         setNatData(nat || []);
 
-        const { data: overrides } = await supabase.from("v_location_overrides").select("*");
+        const { data: overrides } = await supabaseClient.from("v_location_overrides").select("*");
         const oMap = {};
         (overrides || []).forEach(o => { oMap[o.item + ":" + o.location_id] = o; });
         setOverridesMap(oMap);
 
-        const { data: locs } = await supabase.from("locations").select("*");
+        const { data: locs } = await supabaseClient.from("locations").select("*");
         setLocations(locs || []);
 
-        const { data: orgSkus } = await supabase.from("skus").select("name").eq("is_organic", true);
-        const { data: orgNat } = await supabase.from("national_prices").select("name").eq("is_organic", true);
+        const { data: orgSkus } = await supabaseClient.from("skus").select("name").eq("is_organic", true);
+        const { data: orgNat } = await supabaseClient.from("national_prices").select("name").eq("is_organic", true);
         const allOrg = new Set([...(orgSkus || []).map(s => s.name), ...(orgNat || []).map(s => s.name)]);
         setOrganicNames(allOrg);
 
-        const { data: pi } = await supabase.from("product_info").select("*");
+        const { data: pi } = await supabaseClient.from("product_info").select("*");
         const piMap = {};
         (pi || []).forEach(p => { piMap[p.name] = p; });
         setProductInfo(piMap);
 
-        const { data: lu } = await supabase.from("label_urls").select("*");
+        const { data: lu } = await supabaseClient.from("label_urls").select("*");
         const luMap = {};
         (lu || []).forEach(l => { luMap[l.name] = l.url; });
         setLabelUrls(luMap);
 
-        const { data: favRows } = await supabase.from("user_favorites").select("sku_item").eq("user_id", session.user.id);
+        const { data: favRows } = await supabaseClient.from("user_favorites").select("sku_item").eq("user_id", session.user.id);
         setFavorites(new Set((favRows || []).map(r => r.sku_item)));
 
         // Preload price history for admin
         if (prof?.role === "admin" || prof?.role === "viewer_admin") {
-          const { data: histRows } = await supabase
+          const { data: histRows } = await supabaseClient
             .from("price_history")
             .select("sku_item, field_name, old_value, new_value, changed_at, district_id, location_id, table_name")
             .order("changed_at", { ascending: false });
@@ -1866,7 +1866,7 @@ function App() {
     setLoginLoading(true);
     setLoginError("");
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      const { error } = await supabaseClient.auth.signInWithPassword({ email: email.trim(), password });
       if (error) setLoginError(error.message);
     } catch (err) {
       setLoginError("Connection error: " + (err.message || String(err)));
@@ -1875,7 +1875,7 @@ function App() {
   }, []);
 
   const handleLogout = useCallback(async () => {
-    await supabase.auth.signOut();
+    await supabaseClient.auth.signOut();
     setSession(null); setProfile(null);
     setSearch(""); setCatFilter("ALL"); setView("tx");
   }, []);
@@ -2002,9 +2002,9 @@ function App() {
     // Optimistic update
     setFavorites(prev => { const n = new Set(prev); isFav ? n.delete(item) : n.add(item); return n; });
     if (isFav) {
-      await supabase.from("user_favorites").delete().eq("user_id", userId).eq("sku_item", item);
+      await supabaseClient.from("user_favorites").delete().eq("user_id", userId).eq("sku_item", item);
     } else {
-      await supabase.from("user_favorites").insert({ user_id: userId, sku_item: item });
+      await supabaseClient.from("user_favorites").insert({ user_id: userId, sku_item: item });
     }
   }
 
