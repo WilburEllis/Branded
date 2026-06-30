@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.0.5";
+const APP_VERSION = "2.0.6";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -360,30 +360,31 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     const wFloorVal = p.w_floor != null ? p.w_floor : natFloor;
     const eFloorVal = p.e_floor != null ? p.e_floor : natFloor;
 
-    // Collapsed: district targets + location targets
+    // District grid: W TX Target/Floor (left col), E TX Target/Floor (right col)
     const collapsedCells = [];
     if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green });
     if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green });
-    if (overridesMap) {
-      const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
-      if (overridesMap[rhKey]?.target_price != null) collapsedCells.push({ k: "rh_t", l: "Rio Hondo", v: overridesMap[rhKey].target_price, c: S.blue });
-      if (overridesMap[lsKey]?.target_price != null) collapsedCells.push({ k: "ls_t", l: "Lonestar", v: overridesMap[lsKey].target_price, c: S.blue });
-    }
-    // Expanded: cost, wholesale, floor prices
     const expandedCells = [];
     if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber });
     if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber });
+
+    // Location overrides: own grid below district pricing, target row then floor row
+    const locKeys = [];
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
-      if (overridesMap[rhKey]?.floor_price != null) expandedCells.push({ k: "rh_f", l: "Rio Hondo Floor", v: overridesMap[rhKey].floor_price, c: S.blue });
-      if (overridesMap[lsKey]?.floor_price != null) expandedCells.push({ k: "ls_f", l: "Lonestar Floor", v: overridesMap[lsKey].floor_price, c: S.blue });
+      const rh = overridesMap[rhKey]; const ls = overridesMap[lsKey];
+      if (rh && (rh.target_price != null || rh.floor_price != null)) locKeys.push({ id: "rh", name: "Rio Hondo", ov: rh });
+      if (ls && (ls.target_price != null || ls.floor_price != null)) locKeys.push({ id: "ls", name: "Lonestar", ov: ls });
     }
+    const locTargetCells = locKeys.filter(l => l.ov.target_price != null).map(l => ({ k: l.id + "_t", l: l.name, v: l.ov.target_price, c: S.blue }));
+    const locFloorCells = locKeys.filter(l => l.ov.floor_price != null).map(l => ({ k: l.id + "_f", l: l.name + " Floor", v: l.ov.floor_price, c: S.blue }));
+
     // Wholesale as clickable price cell
     const wsCells = [];
     if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: p.wholesale, c: S.purple });
 
     const adminSel = useFloor || (collapsedCells[0]?.k || "w_target");
-    const allAdminCells = [...collapsedCells, ...expandedCells, ...wsCells];
+    const allAdminCells = [...collapsedCells, ...expandedCells, ...locTargetCells, ...locFloorCells, ...wsCells];
     const selCell = allAdminCells.find(c => c.k === adminSel) || allAdminCells[0];
     const adminPrice = selCell?.v;
     const adminPriceLabel = selCell?.l || "Target";
@@ -413,6 +414,12 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             {expandedCells.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(expandedCells.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
                 {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+              </div>
+            )}
+            {locKeys.length > 0 && (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(locKeys.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
+                {locTargetCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+                {locFloorCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
               </div>
             )}
             <div style={{ display: "grid", gridTemplateColumns: (!hideCost && wsCells.length > 0) ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
@@ -453,7 +460,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
                     <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Cost</div><div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>{fmt(cost)}</div></div>
                     <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Margin $</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice || adminPrice || 0) - cost >= 0 ? S.green : "#ef4444" }}>{fmt((bidPrice != null ? bidPrice : (adminPrice || 0)) - cost)}</div></div>
-                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>vs Floor</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? p.e_floor : p.w_floor) ? S.green : "#ef4444" }}>{(bidPrice != null ? bidPrice : adminPrice) != null && (p.w_floor || p.e_floor) ? ((bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? p.e_floor : p.w_floor) ? "✓ Above" : "✗ Below") : "—"}</div></div>
+                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>vs Floor</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? eFloorVal : wFloorVal) ? S.green : "#ef4444" }}>{(bidPrice != null ? bidPrice : adminPrice) != null && (wFloorVal || eFloorVal) ? ((bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? eFloorVal : wFloorVal) ? "✓ Above" : "✗ Below") : "—"}</div></div>
                   </div>
                 </div>
               );
