@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.0.3";
+const APP_VERSION = "2.0.4";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -444,18 +444,21 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             })()}
             {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
               const hist = priceHistoryMap[String(p.item)];
-              function fmtField(f) { return f === "floor_price" ? "Floor" : f === "target_price" ? "Target" : f === "nat_target" ? "Nat Target" : f; }
+              const targetEntries = hist.entries.filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
+              function fmtSource(e) {
+                if (e.field_name === "nat_target") return "National";
+                if (e.district_id === "wtx") return "West TX";
+                if (e.district_id === "etx") return "East TX";
+                if (e.location_id) return e.location_id.toUpperCase();
+                return e.field_name;
+              }
               function fmtHistDate(ts) { const d = new Date(ts); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
               return (
                 <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
-                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Price History</div>
-                  {hist.entries.map((e, i) => (
+                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Target Price History</div>
+                  {targetEntries.map((e, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
-                      <div>
-                        <span style={{ color: S.blue, fontWeight: 600 }}>{fmtField(e.field_name)}</span>
-                        {e.district_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.district_id.toUpperCase()}</span>}
-                        {e.location_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.location_id}</span>}
-                      </div>
+                      <span style={{ color: S.blue, fontWeight: 600 }}>{fmtSource(e)}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ color: S.muted, textDecoration: "line-through", fontSize: 11 }}>{e.old_value != null ? fmt(e.old_value) : "—"}</span>
                         <span style={{ color: S.text, fontSize: 9 }}>→</span>
@@ -464,7 +467,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                       </div>
                     </div>
                   ))}
-                  {hist.entries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No history found</div>}
+                  {targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
                 </div>
               );
             })()}
@@ -518,18 +521,21 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             </div>
             {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
               const hist = priceHistoryMap[String(p.item)];
-              function fmtField(f) { return f === "floor_price" ? "Floor" : f === "target_price" ? "Target" : f === "nat_target" ? "Nat Target" : f; }
+              const targetEntries = hist.entries.filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
+              function fmtSource(e) {
+                if (e.field_name === "nat_target") return "National";
+                if (e.district_id === "wtx") return "West TX";
+                if (e.district_id === "etx") return "East TX";
+                if (e.location_id) return e.location_id.toUpperCase();
+                return e.field_name;
+              }
               function fmtHistDate(ts) { const d = new Date(ts); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); }
               return (
                 <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
-                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Price History</div>
-                  {hist.entries.map((e, i) => (
+                  <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Target Price History</div>
+                  {targetEntries.map((e, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
-                      <div>
-                        <span style={{ color: S.blue, fontWeight: 600 }}>{fmtField(e.field_name)}</span>
-                        {e.district_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.district_id.toUpperCase()}</span>}
-                        {e.location_id && <span style={{ color: S.muted, fontSize: 9, marginLeft: 5 }}>{e.location_id}</span>}
-                      </div>
+                      <span style={{ color: S.blue, fontWeight: 600 }}>{fmtSource(e)}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                         <span style={{ color: S.muted, textDecoration: "line-through", fontSize: 11 }}>{e.old_value != null ? fmt(e.old_value) : "—"}</span>
                         <span style={{ color: S.text, fontSize: 9 }}>→</span>
@@ -538,7 +544,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                       </div>
                     </div>
                   ))}
-                  {hist.entries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No history found</div>}
+                  {targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
                 </div>
               );
             })()}
