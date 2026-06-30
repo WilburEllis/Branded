@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.0.4";
+const APP_VERSION = "2.0.5";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -240,7 +240,7 @@ function InfoModal({ name, productInfo, onClose }) {
 }
 
 // ═══ PRODUCT CARD ═══
-function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite, priceHistoryMap }) {
+function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite }) {
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [useFloor, setUseFloor] = useState(false);
@@ -252,6 +252,23 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   const [bidPrice, setBidPrice] = useState(null);
   const [bidMargin, setBidMargin] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyData, setHistoryData] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  async function toggleHistory() {
+    const next = !showHistory;
+    setShowHistory(next);
+    if (next && historyData === null) {
+      setHistoryLoading(true);
+      const { data } = await supabaseClient
+        .from("price_history")
+        .select("field_name, old_value, new_value, changed_at, district_id, location_id, table_name")
+        .eq("sku_item", p.item)
+        .order("changed_at", { ascending: false })
+        .limit(200);
+      setHistoryData(data || []);
+      setHistoryLoading(false);
+    }
+  }
   const isOrg = organicNames.has(p.name);
   const effectiveRate = customRate != null ? customRate : p.rate_min;
 
@@ -378,7 +395,6 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div>
-            {priceHistoryMap && priceHistoryMap[String(p.item)] && <div style={{ fontSize: 9, color: S.blue, marginTop: 3 }}>📅 {(() => { const d = new Date(priceHistoryMap[String(p.item)].lastDate); return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }); })()}</div>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {isOrg && <span style={{ display: "inline-flex", background: "rgba(74,222,128,.13)", border: "1px solid rgba(74,222,128,.35)", color: "#4ade80", borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 800 }}>◆ ORGANIC</span>}
@@ -412,7 +428,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
               {p.cost != null && <button onClick={e => { e.stopPropagation(); setShowBidCalc(v => !v); if (showBidCalc) { setBidPrice(null); setBidMargin(null); } }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showBidCalc ? "rgba(232,162,48,.25)" : "rgba(232,162,48,.1)", border: "1px solid " + (showBidCalc ? "rgba(232,162,48,.6)" : "rgba(232,162,48,.3)"), color: S.amber, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🧮 Bid Calc</button>}
-              {priceHistoryMap && priceHistoryMap[String(p.item)] && <button onClick={e => { e.stopPropagation(); setShowHistory(v => !v); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>}
+              <button onClick={e => { e.stopPropagation(); toggleHistory(); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>
             </div>
             {showBidCalc && p.cost != null && (() => {
               const cost = p.cost;
@@ -442,9 +458,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                 </div>
               );
             })()}
-            {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
-              const hist = priceHistoryMap[String(p.item)];
-              const targetEntries = hist.entries.filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
+            {showHistory && (() => {
+              const targetEntries = (historyData || []).filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
               function fmtSource(e) {
                 if (e.field_name === "nat_target") return "National";
                 if (e.district_id === "wtx") return "West TX";
@@ -456,7 +471,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               return (
                 <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
                   <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Target Price History</div>
-                  {targetEntries.map((e, i) => (
+                  {historyLoading && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>Loading...</div>}
+                  {!historyLoading && targetEntries.map((e, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
                       <span style={{ color: S.blue, fontWeight: 600 }}>{fmtSource(e)}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -467,7 +483,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                       </div>
                     </div>
                   ))}
-                  {targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
+                  {!historyLoading && targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
                 </div>
               );
             })()}
@@ -517,11 +533,10 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
               <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
-              {priceHistoryMap && priceHistoryMap[String(p.item)] && <button onClick={e => { e.stopPropagation(); setShowHistory(v => !v); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>}
+              <button onClick={e => { e.stopPropagation(); toggleHistory(); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>
             </div>
-            {showHistory && priceHistoryMap && priceHistoryMap[String(p.item)] && (() => {
-              const hist = priceHistoryMap[String(p.item)];
-              const targetEntries = hist.entries.filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
+            {showHistory && (() => {
+              const targetEntries = (historyData || []).filter(e => e.field_name === "target_price" || e.field_name === "nat_target");
               function fmtSource(e) {
                 if (e.field_name === "nat_target") return "National";
                 if (e.district_id === "wtx") return "West TX";
@@ -533,7 +548,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               return (
                 <div style={{ background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.25)", borderRadius: 8, padding: "10px 12px", marginTop: 8 }}>
                   <div style={{ fontSize: 9, color: S.blue, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>📅 Target Price History</div>
-                  {targetEntries.map((e, i) => (
+                  {historyLoading && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>Loading...</div>}
+                  {!historyLoading && targetEntries.map((e, i) => (
                     <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 0", borderBottom: "1px solid rgba(91,155,213,.12)", fontSize: 11 }}>
                       <span style={{ color: S.blue, fontWeight: 600 }}>{fmtSource(e)}</span>
                       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -544,7 +560,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                       </div>
                     </div>
                   ))}
-                  {targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
+                  {!historyLoading && targetEntries.length === 0 && <div style={{ color: S.muted, fontSize: 12, textAlign: "center", padding: 8 }}>No target price history found</div>}
                 </div>
               );
             })()}
@@ -1818,7 +1834,6 @@ function App() {
   const searchRef = useRef(null);
 
   const [favorites, setFavorites] = useState(new Set()); // Set of sku_item integers
-  const [priceHistoryMap, setPriceHistoryMap] = useState({}); // item -> { lastDate, entries[] }
 
   useEffect(() => {
     let subscription;
@@ -1888,21 +1903,6 @@ function App() {
 
         const { data: favRows } = await supabaseClient.from("user_favorites").select("sku_item").eq("user_id", session.user.id);
         setFavorites(new Set((favRows || []).map(r => r.sku_item)));
-
-        // Preload price history for admin
-        if (prof?.role === "admin" || prof?.role === "viewer_admin") {
-          const { data: histRows } = await supabaseClient
-            .from("price_history")
-            .select("sku_item, field_name, old_value, new_value, changed_at, district_id, location_id, table_name")
-            .order("changed_at", { ascending: false });
-          const hMap = {};
-          (histRows || []).forEach(r => {
-            const hKey = String(r.sku_item);
-            if (!hMap[hKey]) hMap[hKey] = { lastDate: r.changed_at, entries: [] };
-            hMap[hKey].entries.push(r);
-          });
-          setPriceHistoryMap(hMap);
-        }
 
         setView(prof?.role === "admin" || prof?.role === "viewer_admin" ? "tx" : "district");
       } catch (err) {
@@ -2045,7 +2045,7 @@ function App() {
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
 
-  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite, priceHistoryMap };
+  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite };
 
   async function toggleFavorite(item) {
     const userId = session?.user?.id;
