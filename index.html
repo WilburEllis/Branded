@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.0.2";
+const APP_VERSION = "2.0.3";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -126,6 +126,8 @@ function calcUreaPPA(pricePerGal, rateQtPerTon, lbsUreaPerAcre) {
   return lbsUreaPerAcre * (rateQtPerTon / 4) / 2000 * pricePerGal;
 }
 
+function natFloorOf(p) { return p.nat_target != null ? Math.round(p.nat_target * 0.95 * 100) / 100 : null; }
+
 function resolvePrice(p, district, location, overridesMap) {
   if (location && overridesMap) {
     const key = p.item + ":" + location;
@@ -134,8 +136,20 @@ function resolvePrice(p, district, location, overridesMap) {
       return { floor: ov.floor_price, target: ov.target_price, label: ov.location_name || location, isOverride: true };
     }
   }
-  if (district === "wtx") return { floor: p.w_floor, target: p.w_target, label: "West TX", isOverride: false };
-  return { floor: p.e_floor, target: p.e_target, label: "East TX", isOverride: false };
+  // A product counts as having a TX footprint if EITHER district has its own
+  // price row. If the district we're asked about is missing one (e.g. the
+  // ETX override was cleared this cycle), fall back to the national price
+  // instead of hiding the price entirely -- but only for products that are
+  // already TX-provisioned, not every national-only reference product.
+  const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
+  if (district === "wtx") {
+    if (p.w_target != null || p.w_floor != null) return { floor: p.w_floor, target: p.w_target, label: "West TX", isOverride: false };
+    if (hasAnyDistrictPrice && p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "West TX", isOverride: false, isNationalFallback: true };
+    return { floor: null, target: null, label: "West TX", isOverride: false };
+  }
+  if (p.e_target != null || p.e_floor != null) return { floor: p.e_floor, target: p.e_target, label: "East TX", isOverride: false };
+  if (hasAnyDistrictPrice && p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "East TX", isOverride: false, isNationalFallback: true };
+  return { floor: null, target: null, label: "East TX", isOverride: false };
 }
 
 function hasDistrictPrice(p, district, location, overridesMap) {
@@ -321,10 +335,18 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
   // ── ADMIN TX CARD ──
   if (isAdmin && !isNational) {
+    const natFloor = natFloorOf(p);
+    const wTargetIsNat = p.w_target == null && p.nat_target != null;
+    const eTargetIsNat = p.e_target == null && p.nat_target != null;
+    const wTargetVal = p.w_target != null ? p.w_target : p.nat_target;
+    const eTargetVal = p.e_target != null ? p.e_target : p.nat_target;
+    const wFloorVal = p.w_floor != null ? p.w_floor : natFloor;
+    const eFloorVal = p.e_floor != null ? p.e_floor : natFloor;
+
     // Collapsed: district targets + location targets
     const collapsedCells = [];
-    if (p.w_target != null) collapsedCells.push({ k: "w_target", l: "W TX Target", v: p.w_target, c: S.green });
-    if (p.e_target != null) collapsedCells.push({ k: "e_target", l: "E TX Target", v: p.e_target, c: S.green });
+    if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green });
+    if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green });
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
       if (overridesMap[rhKey]?.target_price != null) collapsedCells.push({ k: "rh_t", l: "Rio Hondo", v: overridesMap[rhKey].target_price, c: S.blue });
@@ -332,8 +354,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     }
     // Expanded: cost, wholesale, floor prices
     const expandedCells = [];
-    if (p.w_floor != null) expandedCells.push({ k: "w_floor", l: "W TX Floor", v: p.w_floor, c: S.amber });
-    if (p.e_floor != null) expandedCells.push({ k: "e_floor", l: "E TX Floor", v: p.e_floor, c: S.amber });
+    if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber });
+    if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber });
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
       if (overridesMap[rhKey]?.floor_price != null) expandedCells.push({ k: "rh_f", l: "Rio Hondo Floor", v: overridesMap[rhKey].floor_price, c: S.blue });
@@ -530,7 +552,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
   // ── SALES / MANAGER CARD ──
   const [priceMode, setPriceMode] = useState("target");
-  let target, floor, label, accentColor, locOverride, hasLocOverride;
+  let target, floor, label, accentColor, locOverride, hasLocOverride, isNatFallback = false;
   if (isNational) {
     target = p.nat_target; floor = target != null ? Math.round(target * 0.95 * 100) / 100 : null;
     label = "National"; accentColor = "#9ab8a0"; locOverride = null; hasLocOverride = false;
@@ -545,6 +567,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         hasLocOverride = true;
       }
     }
+    const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
+    const natFloor = natFloorOf(p);
     // If location override exists for sales rep, USE it as the main price
     if (hasLocOverride) {
       target = locOverride.target; floor = locOverride.floor;
@@ -552,11 +576,23 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       label = loc?.name || location;
       accentColor = S.blue;
     } else if (district === "wtx") {
-      target = p.w_target; floor = p.w_floor; label = "West TX";
-      accentColor = S.amber;
+      if (p.w_target != null || p.w_floor != null) {
+        target = p.w_target; floor = p.w_floor; label = "West TX";
+      } else if (hasAnyDistrictPrice && p.nat_target != null) {
+        target = p.nat_target; floor = natFloor; label = "West TX (National)"; isNatFallback = true;
+      } else {
+        target = null; floor = null; label = "West TX";
+      }
+      accentColor = isNatFallback ? S.blue : S.amber;
     } else {
-      target = p.e_target; floor = p.e_floor; label = "East TX";
-      accentColor = S.green;
+      if (p.e_target != null || p.e_floor != null) {
+        target = p.e_target; floor = p.e_floor; label = "East TX";
+      } else if (hasAnyDistrictPrice && p.nat_target != null) {
+        target = p.nat_target; floor = natFloor; label = "East TX (National)"; isNatFallback = true;
+      } else {
+        target = null; floor = null; label = "East TX";
+      }
+      accentColor = isNatFallback ? S.blue : S.green;
     }
   }
 
@@ -672,9 +708,19 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       </div>
 
       {showManagerCompare ? (() => {
-        const distPr = district === "wtx" 
-          ? { target: p.w_target, floor: p.w_floor, label: "West TX" }
-          : { target: p.e_target, floor: p.e_floor, label: "East TX" };
+        const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
+        const mgrNatFloor = natFloorOf(p);
+        const distPr = district === "wtx"
+          ? (p.w_target != null || p.w_floor != null
+              ? { target: p.w_target, floor: p.w_floor, label: "West TX" }
+              : (hasAnyDistrictPrice && p.nat_target != null
+                  ? { target: p.nat_target, floor: mgrNatFloor, label: "West TX (Nat)" }
+                  : { target: null, floor: null, label: "West TX" }))
+          : (p.e_target != null || p.e_floor != null
+              ? { target: p.e_target, floor: p.e_floor, label: "East TX" }
+              : (hasAnyDistrictPrice && p.nat_target != null
+                  ? { target: p.nat_target, floor: mgrNatFloor, label: "East TX (Nat)" }
+                  : { target: null, floor: null, label: "East TX" }));
         const mgrLocOverrides = locationIds.map(lid => {
           const key = p.item + ":" + lid;
           const ov = overridesMap[key];
