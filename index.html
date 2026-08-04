@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.0.6";
+const APP_VERSION = "2.1.1";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -22,6 +22,8 @@ if (storedVersion && storedVersion !== APP_VERSION) {
 } else {
   localStorage.setItem("we_app_version", APP_VERSION);
 }
+// Applied before first paint so a saved "light" preference doesn't flash dark first.
+document.documentElement.dataset.weTheme = localStorage.getItem("we_theme") === "light" ? "light" : "dark";
 </script>
 <title>WE Price Lookup — 2026 TX Branded</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>">
@@ -33,12 +35,24 @@ if (storedVersion && storedVersion !== APP_VERSION) {
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1410; color: #d4e0d5; -webkit-font-smoothing: antialiased; }
+  html[data-we-theme="light"] body { background: #f3f2ea; color: #3a4238; }
   input[type="search"]::-webkit-search-cancel-button { -webkit-appearance: none; }
   input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 2px solid #5b9bd5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); margin-top: -7px; }
   input[type="range"]::-moz-range-thumb { width: 20px; height: 20px; border-radius: 50%; background: #fff; border: 2px solid #5b9bd5; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
   select option { background: #171e18; color: #d4e0d5; }
+  html[data-we-theme="light"] select option { background: #ffffff; color: #3a4238; }
   @keyframes spin { to { transform: rotate(360deg); } }
   ::-webkit-scrollbar { width: 0; height: 0; }
+  .we-login-input::placeholder { color: #6b8a6e; opacity: 1; }
+  .we-login-input:-webkit-autofill,
+  .we-login-input:-webkit-autofill:hover,
+  .we-login-input:-webkit-autofill:focus {
+    -webkit-text-fill-color: #eaf2eb;
+    -webkit-box-shadow: 0 0 0 1000px #131c14 inset;
+    box-shadow: 0 0 0 1000px #131c14 inset;
+    caret-color: #eaf2eb;
+    transition: background-color 5000s ease-in-out 0s;
+  }
 </style>
 </head>
 <body>
@@ -93,11 +107,33 @@ const Analytics = (() => {
 })();
 
 // ═══ STYLES ═══
-const S = {
+// Two token sets (Dark = current default, Light = "Daylight" skin) behind one
+// shared, MUTABLE `S` object -- every component in this file reads colors via
+// `S.xxx` by direct reference (not a prop or context), so switching themes
+// means mutating S's own properties in place, then letting a top-level React
+// state change (see App's themeMode) cascade a normal re-render through the
+// tree. No component needs to be touched to pick up the new colors.
+const DARK_THEME = {
   bg: "#0f1410", card: "#171e18", border: "#2a3a2c", green: "#4caf6a", greenDim: "#2d6b3f",
-  amber: "#e8a230", blue: "#5b9bd5", purple: "#b07de8", text: "#d4e0d5", muted: "#6b8a6e",
-  tag: "#1e2e1f", headerBg: "#141e15", inputBg: "#0d150e"
+  amber: "#e8a230", blue: "#5b9bd5", purple: "#b07de8", text: "#d4e0d5", textStrong: "#eaf2eb", muted: "#6b8a6e",
+  tag: "#1e2e1f", headerBg: "#141e15", inputBg: "#0d150e", onAccent: "#0f1410",
+  cellBg: "#131c14", cellBgActive: "#1a2a1b"
 };
+const LIGHT_THEME = {
+  bg: "#f3f2ea", card: "#ffffff", border: "#dcdccb", green: "#2d6b3f", greenDim: "#1f4d2c",
+  amber: "#9c5312", blue: "#2f6690", purple: "#6a4a8f", text: "#3a4238", textStrong: "#182219", muted: "#6b7566",
+  tag: "#eef1e6", headerBg: "#f3f2ea", inputBg: "#ffffff", onAccent: "#ffffff",
+  cellBg: "#f5f4ed", cellBgActive: "#e9f2ea"
+};
+function loadThemeMode() {
+  try { return localStorage.getItem("we_theme") === "light" ? "light" : "dark"; } catch (e) { return "dark"; }
+}
+const S = { ...(loadThemeMode() === "light" ? LIGHT_THEME : DARK_THEME) };
+function applyThemeMode(mode) {
+  Object.assign(S, mode === "light" ? LIGHT_THEME : DARK_THEME);
+  try { localStorage.setItem("we_theme", mode); } catch (e) {}
+  document.documentElement.dataset.weTheme = mode;
+}
 
 // ═══ UTILITIES ═══
 function fmt(v) { if (v === null || v === undefined || typeof v !== "number") return "—"; return "$" + v.toFixed(v < 2 ? 3 : 2); }
@@ -111,8 +147,24 @@ function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice, ozPerUnit)
     return { val: price * (rateMin / divisor), per100: false };
   }
   const isDry = pkg && /\d+\s*LB/i.test(pkg);
-  if (isDry) { if (u.indexOf("lb") !== -1) return { val: price * rateMin, per100: false }; if (u.indexOf("oz") !== -1) return { val: (price / 16) * rateMin, per100: false }; return null; }
-  const upg = u.indexOf("qt") !== -1 ? 4 : u.indexOf("pt") !== -1 ? 8 : u.indexOf("gal") !== -1 ? 1 : 128;
+  if (isDry) {
+    // A dry/by-weight product can still be rate'd per 100 gal of carrier
+    // (e.g. CUT-RATE: 20 LB bag, priced per lb, "3 lb/100gal") rather than a
+    // flat lb/ac rate -- same carrier-volume conversion as the liquid path
+    // below, just applied to a $/lb or $/oz price instead of $/gal.
+    const carrierFactor = per100 ? (sprayVol / 100) : 1;
+    if (u.indexOf("lb") !== -1) return { val: price * rateMin * carrierFactor, per100 };
+    if (u.indexOf("oz") !== -1) return { val: (price / 16) * rateMin * carrierFactor, per100 };
+    return null;
+  }
+  // "oz" must be checked before "gal" -- a per-100-gal-carrier rate written
+  // as e.g. "fl oz/100gal" legitimately contains the substring "gal" in its
+  // own denominator ("100gal"), which used to false-positive into the gal
+  // branch (upg=1) instead of the correct oz branch (upg=128, since price is
+  // per-gallon-of-product and there are 128 fl oz/gal). Caught 2026-07-30:
+  // EMBRECE-EA and PENATROL (both oz/100gal-rated, gallon-priced) were
+  // showing Price/ac 128x too high in production because of this.
+  const upg = u.indexOf("qt") !== -1 ? 4 : u.indexOf("pt") !== -1 ? 8 : u.indexOf("oz") !== -1 ? 128 : u.indexOf("gal") !== -1 ? 1 : 128;
   if (per100) return { val: (sprayVol / 100) * (price / upg) * rateMin, per100: true };
   return { val: (price / upg) * rateMin, per100: false };
 }
@@ -127,6 +179,37 @@ function calcUreaPPA(pricePerGal, rateQtPerTon, lbsUreaPerAcre) {
 }
 
 function natFloorOf(p) { return p.nat_target != null ? Math.round(p.nat_target * 0.95 * 100) / 100 : null; }
+
+// ═══ CATEGORY COLOR SYSTEM ═══
+// Preset swatches offered in the Manage Categories picker. Nathan can assign
+// any of these (or a custom hex) to any category; these are just the palette.
+const CATEGORY_COLOR_PRESETS = [
+  { name: "Orange", hex: "#e67e22" },
+  { name: "Blue", hex: "#3498db" },
+  { name: "Red", hex: "#e74c3c" },
+  { name: "Green", hex: "#27ae60" },
+  { name: "Brown", hex: "#8b5a2b" },
+  { name: "Teal", hex: "#16a085" },
+  { name: "Purple", hex: "#9b59b6" },
+  { name: "Gold", hex: "#d4ac0d" },
+  { name: "Pink", hex: "#d6336c" },
+  { name: "Gray", hex: "#7f8c8d" },
+];
+
+// Best-effort default so a category never looks "unstyled" before anyone's
+// touched the picker -- purely a starting guess, fully overridable.
+function guessCategoryColor(cat) {
+  const c = (cat || "").toLowerCase();
+  if (c.includes("drift")) return "#e67e22";
+  if (c.includes("water")) return "#3498db";
+  if (c.includes("nis")) return "#e74c3c";
+  if ((c.includes("soil") || c.includes("starter")) && c.includes("fert")) return "#8b5a2b";
+  if (c.includes("foliar")) return "#27ae60";
+  if (c.includes("surfactant")) return "#d6336c";
+  if (c.includes("oil")) return "#d4ac0d";
+  if (c.includes("biological") || c.includes("n-fixing")) return "#16a085";
+  return "#7f8c8d";
+}
 
 function resolvePrice(p, district, location, overridesMap) {
   if (location && overridesMap) {
@@ -197,11 +280,11 @@ function LoginScreen({ onLogin, error, loading }) {
         <div style={{ fontSize: 42, marginBottom: 8 }}>🌿</div>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: S.green, letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>WE Price Lookup</h1>
         <p style={{ fontSize: 11, color: "#5a7a5c", letterSpacing: 2, textTransform: "uppercase", marginBottom: 32 }}>2026 TX Branded · Wilbur-Ellis</p>
-        <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)}
-          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: S.text, fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
-        <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)}
+        <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)} className="we-login-input"
+          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
+        <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} className="we-login-input"
           onKeyDown={e => e.key === "Enter" && onLogin(un, pw)}
-          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: S.text, fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
         {error && <p style={{ color: "#ef4444", fontSize: 13, marginBottom: 8 }}>{error}</p>}
         <button onClick={() => onLogin(un, pw)} disabled={loading}
           style={{ width: "100%", padding: 14, background: loading ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
@@ -240,7 +323,17 @@ function InfoModal({ name, productInfo, onClose }) {
 }
 
 // ═══ PRODUCT CARD ═══
-function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite }) {
+function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite, landedCosts }) {
+  // Landed cost wins whenever it exists for the given district, regardless
+  // of price tier -- manufactured cost (p.cost) is only a fallback. Shared
+  // logic with ProfitSheet's costFor(), but this card shows multiple
+  // districts side by side so it needs to resolve cost per-district rather
+  // than off a single toggle.
+  function costForDistrict(distId) {
+    const landed = landedCosts?.[p.item]?.[distId];
+    if (landed) return { cost: landed.avg_cost, source: "Landed" };
+    return { cost: p.cost, source: "Mfg" };
+  }
   const [open, setOpen] = useState(false);
   const [showInfo, setShowInfo] = useState(false);
   const [useFloor, setUseFloor] = useState(false);
@@ -335,12 +428,12 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   }
 
   // ── Shared price cell renderer ──
-  function PriceCell({ k, l, v, c, sel, onSel, showMargin }) {
+  function PriceCell({ k, l, v, c, sel, onSel, showMargin, cellCost }) {
     const isActive = sel === k;
-    const cost = p.cost;
+    const cost = cellCost !== undefined ? cellCost : p.cost;
     const mg = showMargin && cost != null && v != null && v > 0 ? ((v - cost) / v * 100).toFixed(1) + "%" : null;
     return (
-      <div onClick={e => { e.stopPropagation(); onSel(k); }} style={{ background: isActive ? "#1a2a1b" : "#131c14", padding: "6px 8px", cursor: "pointer", borderLeft: isActive ? "3px solid " + c : "3px solid transparent" }}>
+      <div onClick={e => { e.stopPropagation(); onSel(k); }} style={{ background: isActive ? S.cellBgActive : S.cellBg, padding: "6px 8px", cursor: "pointer", borderLeft: isActive ? "3px solid " + c : "3px solid transparent" }}>
         <div style={{ fontSize: 8, color: isActive ? c : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{l}{isActive ? " ✓" : ""}</div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: c }}>{fmt(v)}</div>
@@ -360,15 +453,22 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     const wFloorVal = p.w_floor != null ? p.w_floor : natFloor;
     const eFloorVal = p.e_floor != null ? p.e_floor : natFloor;
 
+    const wCostR = costForDistrict("wtx");
+    const eCostR = costForDistrict("etx");
+    const homeCostR = costForDistrict(district === "wtx" ? "wtx" : "etx");
+
     // District grid: W TX Target/Floor (left col), E TX Target/Floor (right col)
+    // -- margin on each cell uses that district's own landed cost, so West
+    // cells never get margin computed off East's (or vice versa).
     const collapsedCells = [];
-    if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green });
-    if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green });
+    if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green, cellCost: wCostR.cost });
+    if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green, cellCost: eCostR.cost });
     const expandedCells = [];
-    if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber });
-    if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber });
+    if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber, cellCost: wCostR.cost });
+    if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber, cellCost: eCostR.cost });
 
     // Location overrides: own grid below district pricing, target row then floor row
+    // Rio Hondo and Lonestar are both East TX branches.
     const locKeys = [];
     if (overridesMap) {
       const rhKey = p.item + ":rh"; const lsKey = p.item + ":ls";
@@ -376,12 +476,13 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       if (rh && (rh.target_price != null || rh.floor_price != null)) locKeys.push({ id: "rh", name: "Rio Hondo", ov: rh });
       if (ls && (ls.target_price != null || ls.floor_price != null)) locKeys.push({ id: "ls", name: "Lonestar", ov: ls });
     }
-    const locTargetCells = locKeys.filter(l => l.ov.target_price != null).map(l => ({ k: l.id + "_t", l: l.name, v: l.ov.target_price, c: S.blue }));
-    const locFloorCells = locKeys.filter(l => l.ov.floor_price != null).map(l => ({ k: l.id + "_f", l: l.name + " Floor", v: l.ov.floor_price, c: S.blue }));
+    const locTargetCells = locKeys.filter(l => l.ov.target_price != null).map(l => ({ k: l.id + "_t", l: l.name, v: l.ov.target_price, c: S.blue, cellCost: eCostR.cost }));
+    const locFloorCells = locKeys.filter(l => l.ov.floor_price != null).map(l => ({ k: l.id + "_f", l: l.name + " Floor", v: l.ov.floor_price, c: S.blue, cellCost: eCostR.cost }));
 
-    // Wholesale as clickable price cell
+    // Wholesale as clickable price cell -- no district of its own, so it
+    // uses the viewing admin/manager's home district's landed cost.
     const wsCells = [];
-    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: p.wholesale, c: S.purple });
+    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: p.wholesale, c: S.purple, cellCost: homeCostR.cost });
 
     const adminSel = useFloor || (collapsedCells[0]?.k || "w_target");
     const allAdminCells = [...collapsedCells, ...expandedCells, ...locTargetCells, ...locFloorCells, ...wsCells];
@@ -394,7 +495,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
         <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: S.textStrong, lineHeight: 1.2 }}>{p.name}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -423,9 +524,9 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
               </div>
             )}
             <div style={{ display: "grid", gridTemplateColumns: (!hideCost && wsCells.length > 0) ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-              {!hideCost && <div style={{ background: "#131c14", padding: "6px 8px" }}>
-                <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Cost</div>
-                <div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(p.cost)}</div>
+              {!hideCost && <div style={{ background: S.cellBg, padding: "6px 8px" }}>
+                <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Cost <span style={{ color: homeCostR.source === "Landed" ? S.blue : S.muted, textTransform: "none" }}>· {homeCostR.source}</span></div>
+                <div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(homeCostR.cost)}</div>
               </div>}
               {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
             </div>
@@ -434,11 +535,11 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
               <a href={"https://www.google.com/search?q=" + encodeURIComponent("Wilbur Ellis " + p.name + " label")} target="_blank" onClick={() => Analytics.track("label_search", { name: p.name, item: p.item })} rel="noopener" style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(76,175,106,.12)", border: "1px solid rgba(76,175,106,.35)", borderRadius: 6, padding: "7px 12px", textDecoration: "none", color: S.green, fontSize: 11, letterSpacing: .5, textTransform: "uppercase" }}>🔍 Search Label</a>
               {productInfo[p.name] && <button onClick={e => { e.stopPropagation(); setShowInfo(true); Analytics.track("product_info_click", { name: p.name, item: p.item }); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: "rgba(99,102,241,.12)", border: "1px solid rgba(99,102,241,.3)", color: "#818cf8", borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📚 Product Info</button>}
-              {p.cost != null && <button onClick={e => { e.stopPropagation(); setShowBidCalc(v => !v); if (showBidCalc) { setBidPrice(null); setBidMargin(null); } }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showBidCalc ? "rgba(232,162,48,.25)" : "rgba(232,162,48,.1)", border: "1px solid " + (showBidCalc ? "rgba(232,162,48,.6)" : "rgba(232,162,48,.3)"), color: S.amber, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🧮 Bid Calc</button>}
+              {homeCostR.cost != null && <button onClick={e => { e.stopPropagation(); setShowBidCalc(v => !v); if (showBidCalc) { setBidPrice(null); setBidMargin(null); } }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showBidCalc ? "rgba(232,162,48,.25)" : "rgba(232,162,48,.1)", border: "1px solid " + (showBidCalc ? "rgba(232,162,48,.6)" : "rgba(232,162,48,.3)"), color: S.amber, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>🧮 Bid Calc</button>}
               <button onClick={e => { e.stopPropagation(); toggleHistory(); }} style={{ display: "inline-flex", alignItems: "center", gap: 5, background: showHistory ? "rgba(91,155,213,.25)" : "rgba(91,155,213,.1)", border: "1px solid " + (showHistory ? "rgba(91,155,213,.6)" : "rgba(91,155,213,.3)"), color: S.blue, borderRadius: 8, padding: "7px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>📅 Price History</button>
             </div>
-            {showBidCalc && p.cost != null && (() => {
-              const cost = p.cost;
+            {showBidCalc && homeCostR.cost != null && (() => {
+              const cost = homeCostR.cost;
               const displayPrice = bidPrice != null ? bidPrice : (adminPrice || 0);
               const displayMargin = bidMargin != null ? bidMargin : (adminPrice != null ? (((adminPrice - cost) / adminPrice) * 100).toFixed(1) : "");
               return (
@@ -450,15 +551,15 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
                     <div>
                       <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>Bid Price</div>
-                      <input type="number" step="0.01" value={bidPrice != null ? bidPrice : displayPrice} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const v = parseFloat(e.target.value); if (!isNaN(v) && v > 0) { setBidPrice(v); setBidMargin((((v - cost) / v) * 100).toFixed(1)); } else { setBidPrice(null); setBidMargin(null); } }} style={{ width: "100%", background: "#1a2a1c", border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
+                      <input type="number" step="0.01" value={bidPrice != null ? bidPrice : displayPrice} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const v = parseFloat(e.target.value); if (!isNaN(v) && v > 0) { setBidPrice(v); setBidMargin((((v - cost) / v) * 100).toFixed(1)); } else { setBidPrice(null); setBidMargin(null); } }} style={{ width: "100%", background: S.inputBg, border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
                     </div>
                     <div>
                       <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 4 }}>Margin %</div>
-                      <input type="number" step="0.1" value={bidMargin != null ? bidMargin : displayMargin} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const m = parseFloat(e.target.value); if (!isNaN(m) && m < 100) { setBidMargin(e.target.value); const derived = cost / (1 - m / 100); setBidPrice(Math.round(derived * 100) / 100); } else { setBidMargin(null); setBidPrice(null); } }} style={{ width: "100%", background: "#1a2a1c", border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
+                      <input type="number" step="0.1" value={bidMargin != null ? bidMargin : displayMargin} onClick={e => e.stopPropagation()} onChange={e => { e.stopPropagation(); const m = parseFloat(e.target.value); if (!isNaN(m) && m < 100) { setBidMargin(e.target.value); const derived = cost / (1 - m / 100); setBidPrice(Math.round(derived * 100) / 100); } else { setBidMargin(null); setBidPrice(null); } }} style={{ width: "100%", background: S.inputBg, border: "1px solid rgba(232,162,48,.4)", borderRadius: 6, color: S.amber, fontSize: 16, fontWeight: 700, padding: "6px 8px", outline: "none", boxSizing: "border-box" }} />
                     </div>
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginTop: 10 }}>
-                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Cost</div><div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>{fmt(cost)}</div></div>
+                    <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Cost · {homeCostR.source}</div><div style={{ fontSize: 13, fontWeight: 700, color: S.text }}>{fmt(cost)}</div></div>
                     <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>Margin $</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice || adminPrice || 0) - cost >= 0 ? S.green : "#ef4444" }}>{fmt((bidPrice != null ? bidPrice : (adminPrice || 0)) - cost)}</div></div>
                     <div><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8 }}>vs Floor</div><div style={{ fontSize: 13, fontWeight: 700, color: (bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? eFloorVal : wFloorVal) ? S.green : "#ef4444" }}>{(bidPrice != null ? bidPrice : adminPrice) != null && (wFloorVal || eFloorVal) ? ((bidPrice != null ? bidPrice : adminPrice) >= (adminSel === "e_floor" || adminSel === "e_target" ? eFloorVal : wFloorVal) ? "✓ Above" : "✗ Below") : "—"}</div></div>
                   </div>
@@ -507,7 +608,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     return (<React.Fragment>
       <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
         <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
-          <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
+          <div><div style={{ fontSize: 16, fontWeight: 700, color: S.textStrong, lineHeight: 1.2 }}>{p.name}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {isOrg && <span style={{ display: "inline-flex", background: "rgba(74,222,128,.13)", border: "1px solid rgba(74,222,128,.35)", color: "#4ade80", borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 800 }}>◆ ORGANIC</span>}
@@ -516,8 +617,8 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
-          <div style={{ background: "#131c14", padding: "6px 8px" }}><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>National Target</div><div style={{ fontSize: 17, fontWeight: 700, color: "#9ab8a0" }}>{fmt(p.nat_target)}</div></div>
-          <div style={{ background: "#131c14", padding: "6px 8px" }}><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Floor (95%)</div><div style={{ fontSize: 17, fontWeight: 700, color: "#9ab8a0" }}>{p.nat_target != null ? fmt(Math.round(p.nat_target * 0.95 * 100) / 100) : "—"}</div></div>
+          <div style={{ background: S.cellBg, padding: "6px 8px" }}><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>National Target</div><div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(p.nat_target)}</div></div>
+          <div style={{ background: S.cellBg, padding: "6px 8px" }}><div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Floor (95%)</div><div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{p.nat_target != null ? fmt(Math.round(p.nat_target * 0.95 * 100) / 100) : "—"}</div></div>
         </div>
         {open && (
           <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
@@ -726,7 +827,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   return (<React.Fragment>
     <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 10, marginBottom: 8, overflow: "hidden" }}>
       <div onClick={() => { const nx = !open; setOpen(nx); if (nx) Analytics.track("product_view", { name: p.name, item: p.item }); }} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "10px 12px", cursor: "pointer", userSelect: "none" }}>
-        <div><div style={{ fontSize: 16, fontWeight: 700, color: "#eaf2eb", lineHeight: 1.2 }}>{p.name}</div>
+        <div><div style={{ fontSize: 16, fontWeight: 700, color: S.textStrong, lineHeight: 1.2 }}>{p.name}</div>
           <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>#{p.item} · {p.pkg}</div></div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {isOrg && <span style={{ display: "inline-flex", background: "rgba(74,222,128,.13)", border: "1px solid rgba(74,222,128,.35)", color: "#4ade80", borderRadius: 5, padding: "2px 7px", fontSize: 10, fontWeight: 800 }}>◆ ORGANIC</span>}
@@ -1817,6 +1918,1125 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   );
 }
 
+// ═══ PROFITABILITY SHEET ═══
+function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
+  const [dist, setDist] = useState(defaultDistrict === "wtx" ? "wtx" : "etx");
+  const [tier, setTier] = useState("floor"); // wholesale | floor | target
+  const [search, setSearch] = useState("");
+  const [catFilter, setCatFilter] = useState("ALL");
+  const [sheetItems, setSheetItems] = useState([]); // [{item, rate}]
+  const [dragItem, setDragItem] = useState(null);
+  const [dragOverItem, setDragOverItem] = useState(null);
+  const [showPrintPanel, setShowPrintPanel] = useState(false);
+  const [printTitle, setPrintTitle] = useState("");
+  const [printCols, setPrintCols] = useState({ rate: true, cost: false, price: true, costAc: false, priceAc: true, profitAc: false, marginPct: false, notes: false });
+  const [printColors, setPrintColors] = useState(true);
+  const searchRef = useRef(null);
+
+  // ── N-Dure (UAN/Urea) sheet-wide comparison rate ──
+  // Shared across every N-treatment row on the sheet so cost/price/ac stays
+  // apples-to-apples between NDURE 2.0, DCD 25, and TRIPLE -- each product's
+  // own qt/tn dosage (n_treat_low_rate / n_treat_urea_rate) still varies per
+  // row via the existing Rate/ac cell; only the carrier application volume
+  // (gal/ac of UAN or lbs/ac of urea) is synced. Defaults are the midpoint
+  // of each range (10-30 gal/ac, 50-200 lbs/ac).
+  const [nTreatBasis, setNTreatBasis] = useState("uan"); // "uan" | "urea"
+  const [uanGalRate, setUanGalRate] = useState(20);
+  const [ureaLbsRate, setUreaLbsRate] = useState(125);
+
+  // ── Price dial-in (local what-if edits, never auto-written to Supabase) ──
+  const [priceOverrides, setPriceOverrides] = useState({}); // key: "item|tier|dist" -> {item, productName, pkg, tier, dist, isNat, newPrice, originalPrice}
+  const [showSavePrices, setShowSavePrices] = useState(false);
+  const [generatedSql, setGeneratedSql] = useState("");
+
+  // Landed cost wins whenever it exists for this item+district, regardless
+  // of price tier (including Wholesale) -- manufactured cost is only a
+  // fallback for items/districts with no landed data at all. landedCosts is
+  // loaded once at the App level and shared with ProductCard too.
+  function costFor(p) {
+    const landed = landedCosts[p.item]?.[dist];
+    if (landed) return { cost: landed.avg_cost, source: "Landed", low: landed.low_cost, high: landed.high_cost, nLots: landed.n_lots };
+    return { cost: p.cost, source: "Mfg" };
+  }
+
+  // ── Saved lists ──
+  const [savedSheets, setSavedSheets] = useState([]);
+  const [savedSheetsLoaded, setSavedSheetsLoaded] = useState(false);
+  const [currentSheetId, setCurrentSheetId] = useState(null);
+  const [currentSheetName, setCurrentSheetName] = useState("");
+  const [showSaveDialog, setShowSaveDialog] = useState(false);
+  const [saveNameInput, setSaveNameInput] = useState("");
+  const [showLoadDialog, setShowLoadDialog] = useState(false);
+  const [saveError, setSaveError] = useState("");
+
+  // ── Category management ──
+  const [editingCatItem, setEditingCatItem] = useState(null);
+  const [showManageCats, setShowManageCats] = useState(false);
+  const [catError, setCatError] = useState("");
+
+  // ── Category pill order (shared, admin/manager-editable) ──
+  const [catOrder, setCatOrder] = useState([]);
+  const [catOrderLoaded, setCatOrderLoaded] = useState(false);
+  const [dragCat, setDragCat] = useState(null);
+  const [dragOverCat, setDragOverCat] = useState(null);
+  const pillRowRef = useRef(null);
+
+  useEffect(() => {
+    if (catOrderLoaded) return;
+    (async () => {
+      const { data, error } = await supabaseClient.from("category_order").select("*").order("sort_order");
+      if (!error) setCatOrder((data || []).map(r => r.category));
+      setCatOrderLoaded(true);
+    })();
+  }, [catOrderLoaded]);
+
+  async function reorderCategory(fromCat, toCat) {
+    if (!fromCat || !toCat || fromCat === toCat) return;
+    const current = cats.filter(c => c !== "ALL");
+    const next = [...current];
+    const fromIdx = next.indexOf(fromCat);
+    const toIdx = next.indexOf(toCat);
+    if (fromIdx === -1 || toIdx === -1) return;
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    setCatOrder(next);
+    const rows = next.map((c, i) => ({ category: c, sort_order: i, updated_at: new Date().toISOString() }));
+    await supabaseClient.from("category_order").upsert(rows);
+  }
+
+  // ── Category colors (shared, admin/manager-editable) ──
+  const [categoryColors, setCategoryColors] = useState({}); // { [category]: hex }
+  const [categoryColorsLoaded, setCategoryColorsLoaded] = useState(false);
+
+  useEffect(() => {
+    if (categoryColorsLoaded) return;
+    (async () => {
+      const { data, error } = await supabaseClient.from("category_colors").select("*");
+      if (!error) {
+        const map = {};
+        (data || []).forEach(r => { map[r.category] = r.color; });
+        setCategoryColors(map);
+      }
+      setCategoryColorsLoaded(true);
+    })();
+  }, [categoryColorsLoaded]);
+
+  function colorForCategory(cat) {
+    return categoryColors[cat] || guessCategoryColor(cat);
+  }
+
+  // Translucent full-row tint for a category, e.g. "#e67e22" -> "#e67e2226" (~15% opacity).
+  function catRowBg(cat) {
+    return colorForCategory(cat) + "26";
+  }
+
+  async function setCategoryColorValue(cat, hex) {
+    setCategoryColors(prev => ({ ...prev, [cat]: hex }));
+    await supabaseClient.from("category_colors").upsert({ category: cat, color: hex, updated_at: new Date().toISOString() });
+  }
+
+  // Solid text color that reads on top of a solid category-color band --
+  // simple relative-luminance check, not full WCAG math, just enough to
+  // decide white vs. near-black for a header bar.
+  function contrastTextFor(hex) {
+    const h = (hex || "").replace("#", "");
+    if (h.length < 6) return "#111";
+    const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+    const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luminance > 0.6 ? "#141e15" : "#ffffff";
+  }
+
+  // Groups a `rows`-shaped array (each with a `.p.cat`) into contiguous
+  // category blocks, ordered to match the same catOrder the category pills
+  // already use -- so "grouped by product type" always matches the order
+  // Nathan already curated there, not just whatever order items were added
+  // to the sheet in.
+  function groupRowsByCategory(rowsIn) {
+    const byCat = new Map();
+    for (const r of rowsIn) {
+      const cat = r.p.cat || "Uncategorized";
+      if (!byCat.has(cat)) byCat.set(cat, []);
+      byCat.get(cat).push(r);
+    }
+    const present = [...byCat.keys()];
+    const ordered = catOrder.filter(c => present.includes(c));
+    const rest = present.filter(c => !catOrder.includes(c)).sort();
+    return [...ordered, ...rest].map(cat => ({ cat, items: byCat.get(cat) }));
+  }
+
+  useEffect(() => {
+    if (!session?.user?.id || savedSheetsLoaded) return;
+    (async () => {
+      const { data, error } = await supabaseClient.from("saved_sheets").select("*").eq("user_id", session.user.id).order("updated_at", { ascending: false });
+      if (!error) setSavedSheets(data || []);
+      setSavedSheetsLoaded(true);
+    })();
+  }, [session, savedSheetsLoaded]);
+
+  async function saveSheet(asNew) {
+    if (!saveNameInput.trim()) return;
+    setSaveError("");
+    const payload = {
+      user_id: session.user.id,
+      name: saveNameInput.trim(),
+      items: sheetItems,
+      district: dist,
+      tier: tier,
+      updated_at: new Date().toISOString(),
+    };
+    let result;
+    if (currentSheetId && !asNew) {
+      result = await supabaseClient.from("saved_sheets").update(payload).eq("id", currentSheetId).select().single();
+    } else {
+      result = await supabaseClient.from("saved_sheets").insert(payload).select().single();
+    }
+    if (result.error) { setSaveError(result.error.message); return; }
+    setCurrentSheetId(result.data.id);
+    setCurrentSheetName(result.data.name);
+    setSavedSheets(prev => {
+      const exists = prev.some(s => s.id === result.data.id);
+      return exists ? prev.map(s => s.id === result.data.id ? result.data : s) : [result.data, ...prev];
+    });
+    setShowSaveDialog(false);
+    Analytics.track("sheet_saved", { name: payload.name, count: sheetItems.length });
+  }
+
+  function loadSheet(s) {
+    setSheetItems(s.items || []);
+    if (s.district) setDist(s.district);
+    if (s.tier) setTier(s.tier);
+    setCurrentSheetId(s.id);
+    setCurrentSheetName(s.name);
+    setShowLoadDialog(false);
+    Analytics.track("sheet_loaded", { name: s.name });
+  }
+
+  async function deleteSavedSheet(id) {
+    await supabaseClient.from("saved_sheets").delete().eq("id", id);
+    setSavedSheets(prev => prev.filter(s => s.id !== id));
+    if (currentSheetId === id) { setCurrentSheetId(null); setCurrentSheetName(""); }
+  }
+
+  // Categories are never written back to skus.cat -- they're stored as
+  // overrides in product_category_overrides (sku_item -> category) and
+  // merged onto txData at load time in App. This keeps the live pricing
+  // table untouched and needs no new RLS on skus.
+  async function changeProductCategory(item, newCat) {
+    setCatError("");
+    const { error } = await supabaseClient.from("product_category_overrides")
+      .upsert({ sku_item: item, category: newCat, updated_at: new Date().toISOString() });
+    if (error) { setCatError("Couldn't save category: " + error.message); return; }
+    onCategoryChange && onCategoryChange(item, newCat);
+    setEditingCatItem(null);
+    Analytics.track("category_changed", { item, newCat });
+  }
+
+  async function renameCategoryEverywhere(oldCat, newCat) {
+    if (!newCat.trim() || newCat === oldCat) return;
+    setCatError("");
+    const trimmed = newCat.trim();
+    const affected = txData.filter(p => p.cat === oldCat);
+    const rows = affected.map(p => ({ sku_item: p.item, category: trimmed, updated_at: new Date().toISOString() }));
+    const { error } = await supabaseClient.from("product_category_overrides").upsert(rows);
+    if (error) { setCatError("Couldn't rename category: " + error.message); return; }
+    onBulkCategoryChange && onBulkCategoryChange(oldCat, trimmed);
+    Analytics.track("category_renamed", { oldCat, newCat: trimmed, count: rows.length });
+  }
+
+  // Portal target lives outside #root, as a sibling in <body>, so the print
+  // stylesheet can just display:none the whole app without needing to
+  // "un-hide" this content from inside a hidden ancestor.
+  const [printPortalNode] = useState(() => {
+    let el = document.getElementById("we-print-sheet");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "we-print-sheet";
+      document.body.appendChild(el);
+    }
+    return el;
+  });
+
+  const cats = useMemo(() => {
+    const allCats = [...new Set(txData.map(p => p.cat).filter(Boolean))];
+    const ordered = catOrder.filter(c => allCats.includes(c));
+    const unordered = allCats.filter(c => !catOrder.includes(c)).sort();
+    return ["ALL", ...ordered, ...unordered];
+  }, [txData, catOrder]);
+
+  const sheetItemSet = useMemo(() => new Set(sheetItems.map(si => si.item)), [sheetItems]);
+
+  const searchResults = useMemo(() => {
+    // Deliberately ignores catFilter -- typing a search should always search
+    // every product, not just whichever category pill happens to be active.
+    // (Selecting a category with an empty search box is what shows the
+    // Value Ladder instead; those are two separate, non-overlapping modes.)
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    return txData.filter(p =>
+      !sheetItemSet.has(p.item) &&
+      (p.name.toLowerCase().includes(q) || String(p.item).includes(q))
+    ).slice(0, 40);
+  }, [search, catFilter, txData, sheetItemSet]);
+
+  function addToSheet(p) {
+    setSheetItems(prev => [...prev, { item: p.item, rate: p.rate_min || 1 }]);
+    setSearch("");
+    searchRef.current?.focus();
+    Analytics.track("sheet_add_product", { product: p.name, item: p.item });
+  }
+  function removeFromSheet(item) {
+    setSheetItems(prev => prev.filter(si => si.item !== item));
+    Analytics.track("sheet_remove_product", { item });
+  }
+  function updateRate(item, rate) {
+    setSheetItems(prev => prev.map(si => si.item === item ? { ...si, rate } : si));
+    Analytics.track("sheet_rate_changed", { item, rate });
+  }
+  function updateNote(item, note) {
+    setSheetItems(prev => prev.map(si => si.item === item ? { ...si, note } : si));
+  }
+  function clearSheet() {
+    setSheetItems([]);
+    setCurrentSheetId(null);
+    setCurrentSheetName("");
+    Analytics.track("sheet_clear");
+  }
+
+  function reorderSheet(fromItem, toItem) {
+    if (fromItem == null || toItem == null || fromItem === toItem) return;
+    setSheetItems(prev => {
+      const next = [...prev];
+      const fromIdx = next.findIndex(si => si.item === fromItem);
+      const toIdx = next.findIndex(si => si.item === toItem);
+      if (fromIdx === -1 || toIdx === -1) return prev;
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      return next;
+    });
+  }
+
+  // Falls back to national per-field (floor and target independently), same
+  // spirit as the admin price grid's wFloorVal/eFloorVal -- but labels each
+  // field's own "(Nat)" tag off whether THAT field is a national substitute,
+  // not off target's nullness. (The admin grid mislabels floor as non-Nat
+  // when only floor is missing but target has real district data -- worth
+  // fixing there too if you want, didn't touch it since it wasn't asked.)
+  function rawPriceFor(p) {
+    if (tier === "wholesale") return { price: p.wholesale, label: "Wholesale", isNat: false };
+    const isWest = dist === "wtx";
+    const rawTarget = isWest ? p.w_target : p.e_target;
+    const rawFloor = isWest ? p.w_floor : p.e_floor;
+    const base = isWest ? "West TX" : "East TX";
+    if (tier === "floor") {
+      const isNat = rawFloor == null && p.nat_target != null;
+      const val = rawFloor != null ? rawFloor : natFloorOf(p);
+      return { price: val, label: base + " Floor" + (isNat ? " (Nat)" : ""), isNat };
+    }
+    const isNat = rawTarget == null && p.nat_target != null;
+    const val = rawTarget != null ? rawTarget : p.nat_target;
+    return { price: val, label: base + " Target" + (isNat ? " (Nat)" : ""), isNat };
+  }
+
+  // Overrides are keyed per (item, tier, district) -- wholesale is
+  // district-independent so it's keyed under a constant "any" district.
+  // Editing a price is a local "what-if" only; it never writes to Supabase
+  // by itself. The Save Prices panel generates SQL for the user to review
+  // and run themselves, same pattern as every other write in this app.
+  function priceOverrideKey(item) {
+    return item + "|" + tier + "|" + (tier === "wholesale" ? "any" : dist);
+  }
+  function priceFor(p) {
+    const ov = priceOverrides[priceOverrideKey(p.item)];
+    if (ov) {
+      const raw = rawPriceFor(p);
+      return { price: ov.newPrice, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
+    }
+    return { ...rawPriceFor(p), isEdited: false };
+  }
+
+  function setPriceOverride(p, newPrice) {
+    const key = priceOverrideKey(p.item);
+    const raw = rawPriceFor(p);
+    setPriceOverrides(prev => ({
+      ...prev,
+      [key]: {
+        item: p.item, productName: p.name, pkg: p.pkg,
+        tier, dist: tier === "wholesale" ? "any" : dist, isNat: raw.isNat,
+        newPrice, originalPrice: prev[key] ? prev[key].originalPrice : raw.price,
+      },
+    }));
+    Analytics.track("sheet_price_override", { item: p.item, tier, newPrice });
+  }
+  function clearPriceOverride(key) {
+    setPriceOverrides(prev => { const next = { ...prev }; delete next[key]; return next; });
+  }
+  function clearAllPriceOverrides() {
+    setPriceOverrides({});
+    setGeneratedSql("");
+  }
+
+  function generatePriceSql() {
+    const lines = Object.values(priceOverrides).map(ov => {
+      const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
+      if (ov.tier === "wholesale") {
+        return `UPDATE public.skus SET wholesale = ${ov.newPrice} WHERE item = ${ov.item}; -- ${tag}`;
+      }
+      const col = ov.tier === "floor" ? "floor_price" : "target_price";
+      if (ov.isNat) {
+        return `INSERT INTO public.district_prices (sku_item, district_id, ${col}) VALUES (${ov.item}, '${ov.dist}', ${ov.newPrice}); -- ${tag} (was showing National fallback, no existing row for this district)`;
+      }
+      return `UPDATE public.district_prices SET ${col} = ${ov.newPrice} WHERE sku_item = ${ov.item} AND district_id = '${ov.dist}'; -- ${tag}`;
+    });
+    setGeneratedSql(lines.join("\n"));
+  }
+
+  const rows = useMemo(() => sheetItems.map(si => {
+    const p = txData.find(x => x.item === si.item);
+    if (!p) return null;
+    const { price, label, isEdited } = priceFor(p);
+    const { cost, source: costSource, low: costLow, high: costHigh, nLots: costNLots } = costFor(p);
+    const rate = si.rate;
+    const isNTP = p.n_treatment === true || p.n_treatment === "true";
+    let costAc, priceAc;
+    if (isNTP) {
+      if (nTreatBasis === "urea" && p.n_treat_urea_rate) {
+        priceAc = price != null ? calcUreaPPA(price, p.n_treat_urea_rate, ureaLbsRate) : null;
+        costAc = cost != null ? calcUreaPPA(cost, p.n_treat_urea_rate, ureaLbsRate) : null;
+      } else {
+        priceAc = price != null ? calcNTreatPPA(price, rate, uanGalRate) : null;
+        costAc = cost != null ? calcNTreatPPA(cost, rate, uanGalRate) : null;
+      }
+    } else {
+      const canCalc = rate != null && p.rate_unit != null;
+      const ppaPrice = canCalc ? calcPPA(p.pkg, price, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+      const ppaCost = canCalc ? calcPPA(p.pkg, cost, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+      costAc = ppaCost ? ppaCost.val : null;
+      priceAc = ppaPrice ? ppaPrice.val : null;
+    }
+    const profitAc = (costAc != null && priceAc != null) ? priceAc - costAc : null;
+    const marginPct = (price != null && cost != null && price > 0) ? ((price - cost) / price) * 100 : null;
+    return { p, price, label, isEdited, rate, note: si.note || "", cost, costSource, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct, isNTP };
+  }).filter(Boolean), [sheetItems, tier, dist, txData, overridesMap, priceOverrides, landedCosts, nTreatBasis, uanGalRate, ureaLbsRate]);
+
+  const totalProfitAc = rows.reduce((s, r) => s + (r.profitAc || 0), 0);
+  const groupedRows = useMemo(() => groupRowsByCategory(rows), [rows, catOrder]);
+
+  // Value Ladder: every product in the selected category, at its own default
+  // rate, sorted cheapest to priciest -- shows where each product sits in
+  // the category's price/profit lineup so gaps and overlaps are visible.
+  const ladderRows = useMemo(() => {
+    if (catFilter === "ALL") return [];
+    return txData
+      .filter(p => p.cat === catFilter)
+      .map(p => {
+        const { price, label, isEdited } = priceFor(p);
+        const { cost, source: costSource, low: costLow, high: costHigh, nLots: costNLots } = costFor(p);
+        const rate = p.rate_min;
+        const canCalc = rate != null && p.rate_unit != null;
+        const ppaPrice = canCalc ? calcPPA(p.pkg, price, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+        const ppaCost = canCalc ? calcPPA(p.pkg, cost, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+        const costAc = ppaCost ? ppaCost.val : null;
+        const priceAc = ppaPrice ? ppaPrice.val : null;
+        const profitAc = (costAc != null && priceAc != null) ? priceAc - costAc : null;
+        const marginPct = (price != null && cost != null && price > 0) ? ((price - cost) / price) * 100 : null;
+        return { p, price, label, isEdited, rate, cost, costSource, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct };
+      })
+      .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  }, [catFilter, txData, tier, dist, overridesMap, priceOverrides, landedCosts]);
+
+  const catCounts = useMemo(() => {
+    const counts = {};
+    txData.forEach(p => { if (p.cat) counts[p.cat] = (counts[p.cat] || 0) + 1; });
+    return counts;
+  }, [txData]);
+
+  const tierBtn = (key, label) => (
+    <button key={key} onClick={() => { setTier(key); Analytics.track("sheet_tier_changed", { tier: key }); }}
+      style={{ fontSize: 11, fontWeight: 700, color: tier === key ? S.onAccent : S.blue, background: tier === key ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (tier === key ? S.blue : "rgba(91,155,213,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
+      {label}
+    </button>
+  );
+  const distBtn = (key, label) => (
+    <button key={key} onClick={() => { setDist(key); Analytics.track("sheet_district_changed", { district: key }); }}
+      style={{ fontSize: 11, fontWeight: 700, color: dist === key ? S.onAccent : S.green, background: dist === key ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (dist === key ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
+      {label}
+    </button>
+  );
+
+  function EditableRate({ value, unit, onChange }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(String(value));
+    const onDone = () => { const n = parseFloat(val); if (!isNaN(n) && n > 0) onChange(n); else setVal(String(value)); setEditing(false); };
+    if (editing) {
+      return <input type="number" autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onBlur={onDone} onKeyDown={e => { if (e.key === "Enter") onDone(); }}
+        style={{ width: 55, fontSize: 13, fontWeight: 700, color: S.blue, background: "rgba(255,255,255,.08)", border: "1px solid " + S.blue, borderRadius: 4, padding: "2px 5px", outline: "none", textAlign: "center" }} />;
+    }
+    return (
+      <span onClick={() => { setVal(String(value)); setEditing(true); }}
+        style={{ cursor: "pointer", borderBottom: "1px dashed " + S.blue, fontWeight: 700, color: S.blue }}>
+        {value}{unit ? " " + unit : ""}
+      </span>
+    );
+  }
+
+  function EditableNote({ value, onChange }) {
+    const [val, setVal] = useState(value || "");
+    useEffect(() => { setVal(value || ""); }, [value]);
+    return (
+      <input type="text" value={val} placeholder="Add a note…" onChange={e => setVal(e.target.value)}
+        onBlur={() => { if (val !== (value || "")) onChange(val); }}
+        onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+        style={{ width: "100%", minWidth: 130, fontSize: 11, color: S.text, background: S.inputBg, border: "1px solid " + S.border, borderRadius: 4, padding: "4px 6px", outline: "none" }} />
+    );
+  }
+
+  function EditablePrice({ value, isEdited, onChange }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(value != null ? String(value) : "");
+    const onDone = () => {
+      const n = parseFloat(val);
+      if (!isNaN(n) && n >= 0) onChange(n);
+      else setVal(value != null ? String(value) : "");
+      setEditing(false);
+    };
+    if (editing) {
+      return <input type="number" step="0.01" autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onBlur={onDone} onKeyDown={e => { if (e.key === "Enter") onDone(); }}
+        style={{ width: 75, fontSize: 13, fontWeight: 700, color: S.amber, background: "rgba(255,255,255,.08)", border: "1px solid " + S.amber, borderRadius: 4, padding: "2px 5px", outline: "none", textAlign: "right" }} />;
+    }
+    return (
+      <span onClick={() => { setVal(value != null ? String(value) : ""); setEditing(true); }}
+        title="Click to try a different price"
+        style={{ cursor: "pointer", borderBottom: "1px dashed " + (isEdited ? S.amber : S.muted), fontWeight: 700, color: isEdited ? S.amber : S.text }}>
+        {fmt(value)}
+      </span>
+    );
+  }
+
+  // Editing margin back-solves a price: margin% = (price-cost)/price, so
+  // price = cost / (1 - margin/100). Feeds straight into the same
+  // setPriceOverride() the Price field uses -- margin editing is just an
+  // alternate input for the same override, not a separate concept.
+  function EditableMargin({ value, cost, isEdited, onPriceChange }) {
+    const [editing, setEditing] = useState(false);
+    const [val, setVal] = useState(value != null ? value.toFixed(1) : "");
+    const canEditMargin = cost != null && cost > 0;
+    const onDone = () => {
+      const m = parseFloat(val);
+      if (!isNaN(m) && m < 100 && canEditMargin) {
+        const newPrice = Math.round((cost / (1 - m / 100)) * 100) / 100;
+        onPriceChange(newPrice);
+      } else {
+        setVal(value != null ? value.toFixed(1) : "");
+      }
+      setEditing(false);
+    };
+    if (!canEditMargin) return <span style={{ color: S.muted }}>{value != null ? value.toFixed(0) + "%" : "—"}</span>;
+    if (editing) {
+      return <input type="number" step="0.5" autoFocus value={val} onChange={e => setVal(e.target.value)}
+        onBlur={onDone} onKeyDown={e => { if (e.key === "Enter") onDone(); }}
+        style={{ width: 55, fontSize: 13, fontWeight: 700, color: S.amber, background: "rgba(255,255,255,.08)", border: "1px solid " + S.amber, borderRadius: 4, padding: "2px 5px", outline: "none", textAlign: "right" }} />;
+    }
+    return (
+      <span onClick={() => { setVal(value != null ? value.toFixed(1) : ""); setEditing(true); }}
+        title="Click to set a target margin % — recalculates the price"
+        style={{ cursor: "pointer", borderBottom: "1px dashed " + (isEdited ? S.amber : S.muted), fontWeight: 700, color: isEdited ? S.amber : S.muted }}>
+        {value != null ? value.toFixed(0) + "%" : "—"}
+      </span>
+    );
+  }
+
+  return (
+    <div style={{ padding: "6px 12px 80px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>District</div>
+            <div style={{ display: "flex", gap: 6 }}>{distBtn("wtx", "West TX")}{distBtn("etx", "East TX")}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Price Tier</div>
+            <div style={{ display: "flex", gap: 6 }}>{tierBtn("wholesale", "Wholesale")}{tierBtn("floor", "Floor")}{tierBtn("target", "Target")}</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          {currentSheetName && <div style={{ fontSize: 10, color: S.muted }}>Editing: <span style={{ color: S.text, fontWeight: 600 }}>{currentSheetName}</span></div>}
+          <div style={{ display: "flex", gap: 6 }}>
+            {canEdit && Object.keys(priceOverrides).length > 0 && (
+              <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
+                style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.amber, border: "1px solid " + S.amber, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+                💰 Save Prices ({Object.keys(priceOverrides).length})
+              </button>
+            )}
+            {canEdit && <button onClick={() => setShowManageCats(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>🏷️ Categories</button>}
+            <button onClick={() => { setShowLoadDialog(true); }} style={{ fontSize: 10, fontWeight: 700, color: S.text, background: S.tag, border: "1px solid " + S.border, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>📂 My Sheets{savedSheets.length > 0 ? " (" + savedSheets.length + ")" : ""}</button>
+            <button onClick={() => { setSaveNameInput(currentSheetName || ""); setSaveError(""); setShowSaveDialog(true); }}
+              disabled={!sheetItems.length}
+              style={{ fontSize: 10, fontWeight: 700, color: sheetItems.length ? S.onAccent : S.muted, background: sheetItems.length ? S.green : S.tag, border: "1px solid " + (sheetItems.length ? S.green : S.border), padding: "5px 10px", borderRadius: 6, cursor: sheetItems.length ? "pointer" : "not-allowed" }}>💾 Save List</button>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ position: "relative", marginBottom: 8 }}>
+        <input ref={searchRef} type="search" placeholder="Search product to add to sheet..." value={search} onChange={e => setSearch(e.target.value)}
+          style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 16, padding: "9px 36px 9px 12px", outline: "none", boxSizing: "border-box" }} />
+        {search && <button onClick={() => { setSearch(""); searchRef.current?.focus(); }} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: S.muted, fontSize: 16, cursor: "pointer" }}>✕</button>}
+        {searchResults.length > 0 && (
+          <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50, background: S.card, border: "1px solid " + S.border, borderRadius: 8, maxHeight: 320, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}>
+            {searchResults.map(p => (
+              <div key={p.item} onClick={() => addToSheet(p)}
+                style={{ padding: "9px 12px", cursor: "pointer", borderBottom: "1px solid " + S.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{p.name}</div>
+                  <div style={{ fontSize: 10, color: S.muted }}>{p.pkg ? p.pkg + " · " : ""}#{p.item}{p.cat ? " · " + p.cat : ""}</div>
+                </div>
+                <span style={{ fontSize: 16, color: S.blue }}>+</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+        <button onClick={() => pillRowRef.current?.scrollBy({ left: -220, behavior: "smooth" })}
+          style={{ flexShrink: 0, fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, borderRadius: 6, width: 24, height: 24, cursor: "pointer", lineHeight: 1 }}>‹</button>
+        <div ref={pillRowRef} onWheel={e => { if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) pillRowRef.current.scrollLeft += e.deltaY; }}
+          style={{ display: "flex", gap: 5, overflowX: "auto", scrollbarWidth: "none", scrollBehavior: "smooth" }}>
+          {cats.map(c => (
+            <button key={c} onClick={() => { setCatFilter(c); setSearch(""); }}
+              draggable={canEdit && c !== "ALL"}
+              onDragStart={e => { setDragCat(c); e.dataTransfer.effectAllowed = "move"; }}
+              onDragOver={e => { if (c !== "ALL") { e.preventDefault(); if (dragOverCat !== c) setDragOverCat(c); } }}
+              onDrop={e => { e.preventDefault(); reorderCategory(dragCat, c); setDragCat(null); setDragOverCat(null); }}
+              onDragEnd={() => { setDragCat(null); setDragOverCat(null); }}
+              style={{ fontSize: 10, background: c === catFilter ? S.greenDim : S.tag, border: "1px solid " + (dragOverCat === c && dragCat !== c ? S.blue : c === catFilter ? S.green : S.border), color: c === catFilter ? "#fff" : S.muted, borderRadius: 20, padding: "5px 11px", whiteSpace: "nowrap", cursor: canEdit && c !== "ALL" ? "grab" : "pointer", letterSpacing: .5, textTransform: "uppercase", flexShrink: 0, opacity: dragCat === c ? .4 : 1 }}>
+              {c === "ALL" ? "All" : c}{c !== "ALL" && catCounts[c] ? " (" + catCounts[c] + ")" : ""}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => pillRowRef.current?.scrollBy({ left: 220, behavior: "smooth" })}
+          style={{ flexShrink: 0, fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, borderRadius: 6, width: 24, height: 24, cursor: "pointer", lineHeight: 1 }}>›</button>
+      </div>
+      {canEdit && <div style={{ fontSize: 9, color: S.muted, marginBottom: 12 }}>Scroll with the arrows, or drag a category to reorder.</div>}
+      {!canEdit && <div style={{ marginBottom: 12 }} />}
+
+      {catFilter !== "ALL" && !search && (
+        <div style={{ marginBottom: 20, background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.28)", borderRadius: 12, padding: 14 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800, color: S.blue }}>🪜 Value Ladder — {catFilter}</div>
+            <div style={{ fontSize: 10, color: S.muted }}>{ladderRows.length} products · cheapest to most expensive · at each product's default rate</div>
+          </div>
+          {ladderRows.length === 0 ? (
+            <div style={{ fontSize: 12, color: S.muted, padding: "16px 0" }}>No products found in this category.</div>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+                <thead>
+                  <tr>
+                    {["Product", "Rate/ac", "Cost", "Price", "Price/ac", "Profit/ac", "Margin", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 1 && i <= 6 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px", borderBottom: "1px solid " + S.border, whiteSpace: "nowrap" }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {ladderRows.map(r => (
+                    <tr key={r.p.item} style={{ opacity: sheetItemSet.has(r.p.item) ? .5 : 1, background: catRowBg(r.p.cat) }}>
+                      <td style={{ padding: "8px", borderBottom: "1px solid " + S.border + "60" }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.p.name}</div>
+                        <div style={{ fontSize: 10, color: S.muted, display: "flex", alignItems: "center", gap: 5 }}>
+                          {r.p.pkg ? r.p.pkg + " · " : ""}#{r.p.item}
+                          {canEdit && (editingCatItem === r.p.item ? (
+                            <select autoFocus defaultValue={r.p.cat} onBlur={() => setEditingCatItem(null)}
+                              onChange={e => changeProductCategory(r.p.item, e.target.value)}
+                              style={{ fontSize: 9, background: S.inputBg, color: S.text, border: "1px solid " + S.blue, borderRadius: 4 }}>
+                              {cats.filter(c => c !== "ALL").map(c => <option key={c} value={c}>{c}</option>)}
+                            </select>
+                          ) : (
+                            <span onClick={() => setEditingCatItem(r.p.item)} style={{ cursor: "pointer", textDecoration: "underline dotted", color: S.purple }} title="Click to recategorize">✎ edit cat</span>
+                          ))}
+                        </div>
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.rate != null && r.p.rate_unit ? r.rate + " " + r.p.rate_unit : "—"}</td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                        <div style={{ color: S.text }}>{fmt(r.cost)}</div>
+                        <div style={{ fontSize: 9, color: r.costSource === "Landed" ? S.blue : S.muted }} title={r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>{r.costSource}</div>
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                        <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setPriceOverride(r.p, v)} />
+                        <div style={{ fontSize: 9, color: S.muted }}>{r.label}</div>
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", fontWeight: 800, color: r.profitAc == null ? S.muted : r.profitAc >= 0 ? S.green : "#ef4444" }}>{r.profitAc != null ? fmtAc(r.profitAc) : "—"}</td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                        <EditableMargin value={r.marginPct} cost={r.cost} isEdited={r.isEdited} onPriceChange={v => setPriceOverride(r.p, v)} />
+                      </td>
+                      <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                        {sheetItemSet.has(r.p.item)
+                          ? <span style={{ fontSize: 10, color: S.muted }}>on sheet</span>
+                          : <button onClick={() => addToSheet(r.p)} style={{ background: "rgba(91,155,213,.15)", border: "1px solid " + S.blue, color: S.blue, borderRadius: 6, padding: "3px 9px", fontSize: 14, cursor: "pointer" }}>+</button>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {catError && <div style={{ fontSize: 11, color: "#ef4444", marginTop: 8 }}>{catError}</div>}
+        </div>
+      )}
+
+      <div style={{ background: "rgba(76,175,106,.06)", border: "1px solid rgba(76,175,106,.28)", borderRadius: 12, padding: 14 }}>
+        <div style={{ fontSize: 13, fontWeight: 800, color: S.green, marginBottom: rows.length === 0 ? 0 : 10 }}>📋 My Sheet{currentSheetName ? " — " + currentSheetName : ""}</div>
+      {rows.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "48px 20px 24px", color: S.muted }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🧮</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No products on your sheet yet</div>
+          <div style={{ fontSize: 12 }}>Search above, or open a category's Value Ladder, and tap a product to add it</div>
+        </div>
+      ) : (
+        <React.Fragment>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+              <thead>
+                <tr>
+                  {["", "Product", "Rate/ac", "Cost", "Price", "Cost/ac", "Price/ac", "Profit/ac", "Margin", "Notes", ""].map((h, i) => (
+                    <th key={i} style={{ textAlign: i >= 2 && i <= 8 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px", borderBottom: "1px solid " + S.border, whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {groupedRows.map(group => (
+                  <React.Fragment key={group.cat}>
+                    <SheetGroupHeader cat={group.cat} count={group.items.length} colSpan={11}
+                      color={colorForCategory(group.cat)} textColor={contrastTextFor(colorForCategory(group.cat))}
+                      onRename={renameCategoryEverywhere}
+                      canDrag={canEdit}
+                      isDragging={dragCat === group.cat}
+                      isDragOver={dragOverCat === group.cat && dragCat !== group.cat}
+                      onHandleDragStart={e => { setDragCat(group.cat); e.dataTransfer.effectAllowed = "move"; }}
+                      onHandleDragEnd={() => { setDragCat(null); setDragOverCat(null); }}
+                      onRowDragOver={e => { if (dragCat) { e.preventDefault(); if (dragOverCat !== group.cat) setDragOverCat(group.cat); } }}
+                      onRowDrop={e => { if (dragCat) { e.preventDefault(); reorderCategory(dragCat, group.cat); setDragCat(null); setDragOverCat(null); } }} />
+                    {group.items.some(r => r.isNTP) && (
+                      <tr>
+                        <td colSpan={11} style={{ padding: "6px 10px", background: "rgba(91,155,213,.08)", borderBottom: "1px solid " + S.border }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 9, fontWeight: 700, color: S.blue, textTransform: "uppercase", letterSpacing: .5 }}>📈 N-Dure Compare</span>
+                            <div style={{ display: "flex", gap: 4 }}>
+                              <button onClick={() => setNTreatBasis("uan")} style={{ fontSize: 10, fontWeight: 700, color: nTreatBasis === "uan" ? S.onAccent : S.blue, background: nTreatBasis === "uan" ? S.blue : "transparent", border: "1px solid " + S.blue, padding: "3px 8px", borderRadius: 5, cursor: "pointer" }}>UAN</button>
+                              <button onClick={() => setNTreatBasis("urea")} style={{ fontSize: 10, fontWeight: 700, color: nTreatBasis === "urea" ? S.onAccent : S.blue, background: nTreatBasis === "urea" ? S.blue : "transparent", border: "1px solid " + S.blue, padding: "3px 8px", borderRadius: 5, cursor: "pointer" }}>Urea</button>
+                            </div>
+                            {nTreatBasis === "uan" ? (
+                              <label style={{ fontSize: 10, color: S.muted, display: "flex", alignItems: "center", gap: 4 }}>
+                                UAN gal/ac (10-30):
+                                <input type="number" min={10} max={30} step={1} value={uanGalRate}
+                                  onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setUanGalRate(v); }}
+                                  style={{ width: 50, fontSize: 11, padding: "2px 4px", borderRadius: 4, border: "1px solid " + S.border, background: S.bg, color: S.text }} />
+                              </label>
+                            ) : (
+                              <label style={{ fontSize: 10, color: S.muted, display: "flex", alignItems: "center", gap: 4 }}>
+                                Urea lbs/ac (50-200):
+                                <input type="number" min={50} max={200} step={5} value={ureaLbsRate}
+                                  onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v)) setUreaLbsRate(v); }}
+                                  style={{ width: 55, fontSize: 11, padding: "2px 4px", borderRadius: 4, border: "1px solid " + S.border, background: S.bg, color: S.text }} />
+                              </label>
+                            )}
+                            <span style={{ fontSize: 9, color: S.muted, fontStyle: "italic" }}>same rate applied to every N-Dure row below, so cost/profit stays apples-to-apples</span>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    {group.items.map(r => (
+                      <tr key={r.p.item}
+                        onDragOver={e => { e.preventDefault(); if (dragOverItem !== r.p.item) setDragOverItem(r.p.item); }}
+                        onDrop={e => { e.preventDefault(); reorderSheet(dragItem, r.p.item); setDragItem(null); setDragOverItem(null); }}
+                        style={{ background: dragOverItem === r.p.item && dragItem !== r.p.item ? "rgba(91,155,213,.1)" : catRowBg(r.p.cat), borderTop: dragOverItem === r.p.item && dragItem !== r.p.item ? "2px solid " + S.blue : "2px solid transparent" }}>
+                        <td style={{ padding: "8px 2px", borderBottom: "1px solid " + S.border + "60", width: 22 }}>
+                          <span draggable onDragStart={e => { setDragItem(r.p.item); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragItem(null); setDragOverItem(null); }}
+                            style={{ cursor: "grab", color: S.muted, fontSize: 14, userSelect: "none", touchAction: "none" }} title="Drag to reorder">⠿</span>
+                        </td>
+                        <td style={{ padding: "8px", borderBottom: "1px solid " + S.border + "60" }}>
+                          {labelUrls[r.p.name] ? (
+                            <a href={labelUrls[r.p.name]} target="_blank" rel="noopener noreferrer"
+                              onClick={e => { e.stopPropagation(); Analytics.track("sheet_label_click", { name: r.p.name, item: r.p.item }); }}
+                              title="Open product label"
+                              style={{ fontSize: 13, fontWeight: 600, color: S.blue, textDecoration: "underline", textDecorationColor: "rgba(91,155,213,.4)", cursor: "pointer" }}>{r.p.name}</a>
+                          ) : (
+                            <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.p.name}</div>
+                          )}
+                          <div style={{ fontSize: 10, color: S.muted }}>{r.p.pkg ? r.p.pkg + " · " : ""}#{r.p.item}</div>
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                          {r.p.rate_unit ? <EditableRate value={r.rate} unit={r.p.rate_unit} onChange={v => updateRate(r.p.item, v)} /> : <span style={{ color: S.muted }}>—</span>}
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                          <div style={{ color: S.text }}>{fmt(r.cost)}</div>
+                          <div style={{ fontSize: 9, color: r.costSource === "Landed" ? S.blue : S.muted }} title={r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>{r.costSource}</div>
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                          <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setPriceOverride(r.p, v)} />
+                          <div style={{ fontSize: 9, color: S.muted }}>{r.label}</div>
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.costAc != null ? fmtAc(r.costAc) : "—"}</td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", fontWeight: 800, color: r.profitAc == null ? S.muted : r.profitAc >= 0 ? S.green : "#ef4444" }}>
+                          {r.profitAc != null ? fmtAc(r.profitAc) : "—"}
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                          <EditableMargin value={r.marginPct} cost={r.cost} isEdited={r.isEdited} onPriceChange={v => setPriceOverride(r.p, v)} />
+                        </td>
+                        <td style={{ padding: "8px", borderBottom: "1px solid " + S.border + "60", minWidth: 140 }}>
+                          <EditableNote value={r.note} onChange={v => updateNote(r.p.item, v)} />
+                        </td>
+                        <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
+                          <button onClick={() => removeFromSheet(r.p.item)} style={{ background: "none", border: "none", color: S.muted, fontSize: 16, cursor: "pointer", padding: 2 }}>✕</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, paddingTop: 12, borderTop: "2px solid " + S.border }}>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={clearSheet} style={{ fontSize: 11, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>Clear Sheet</button>
+              <button onClick={() => setShowPrintPanel(true)} style={{ fontSize: 11, fontWeight: 700, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>🖨️ Print / Share</button>
+            </div>
+            <div style={{ textAlign: "right" }}>
+              <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>Total Profit / Acre (all products, stacked)</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: totalProfitAc >= 0 ? S.green : "#ef4444" }}>{fmtAc(totalProfitAc)}</div>
+            </div>
+          </div>
+        </React.Fragment>
+      )}
+      </div>
+
+      {showPrintPanel && (
+        <div onClick={() => setShowPrintPanel(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 380, width: "100%", padding: "20px" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: S.text, marginBottom: 4 }}>Print / Share Sheet</div>
+            <div style={{ fontSize: 11, color: S.muted, marginBottom: 16 }}>Choose which columns to include. Cost is off by default.</div>
+
+            <input type="text" placeholder="Sheet title (e.g. grower or field name)" value={printTitle} onChange={e => setPrintTitle(e.target.value)}
+              style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", marginBottom: 14 }} />
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 18 }}>
+              {[["rate", "Rate/ac"], ["cost", "Cost"], ["price", "Price"], ["costAc", "Cost/ac"], ["priceAc", "Price/ac"], ["profitAc", "Profit/ac"], ["marginPct", "Margin %"], ["notes", "Notes"]].map(([key, label]) => (
+                <label key={key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer" }}>
+                  <input type="checkbox" checked={printCols[key]} onChange={e => setPrintCols(prev => ({ ...prev, [key]: e.target.checked }))}
+                    style={{ width: 15, height: 15, accentColor: S.blue }} />
+                  {label}
+                </label>
+              ))}
+            </div>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer", marginBottom: 18 }}>
+              <input type="checkbox" checked={printColors} onChange={e => setPrintColors(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: S.blue }} />
+              Category colors
+            </label>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowPrintPanel(false)} style={{ flex: 1, fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+              <button onClick={() => {
+                setShowPrintPanel(false);
+                const d = new Date();
+                const stamp = (d.getMonth() + 1) + "." + String(d.getDate()).padStart(2, "0") + "." + String(d.getFullYear()).slice(-2);
+                const originalTitle = document.title;
+                document.title = originalTitle + " " + stamp;
+                const restore = () => { document.title = originalTitle; window.removeEventListener("afterprint", restore); };
+                window.addEventListener("afterprint", restore);
+                setTimeout(() => window.print(), 60);
+              }}
+                style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.blue, border: "none", padding: "10px", borderRadius: 8, cursor: "pointer" }}>🖨️ Print / Save PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveDialog && (
+        <div onClick={() => setShowSaveDialog(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 380, width: "100%", padding: "20px" }}>
+            <div style={{ fontSize: 16, fontWeight: 800, color: S.text, marginBottom: 4 }}>Save List</div>
+            <div style={{ fontSize: 11, color: S.muted, marginBottom: 14 }}>{sheetItems.length} product{sheetItems.length === 1 ? "" : "s"} · {dist === "wtx" ? "West TX" : "East TX"} · {tier}</div>
+            <input type="text" autoFocus placeholder="List name (e.g. Corn Starter Package)" value={saveNameInput} onChange={e => setSaveNameInput(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") saveSheet(!currentSheetId); }}
+              style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "9px 10px", outline: "none", boxSizing: "border-box", marginBottom: 10 }} />
+            {saveError && <div style={{ fontSize: 11, color: "#ef4444", marginBottom: 10 }}>{saveError}</div>}
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setShowSaveDialog(false)} style={{ flex: 1, fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px", borderRadius: 8, cursor: "pointer" }}>Cancel</button>
+              {currentSheetId && <button onClick={() => saveSheet(true)} disabled={!saveNameInput.trim()}
+                style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.text, background: S.tag, border: "1px solid " + S.border, padding: "10px", borderRadius: 8, cursor: "pointer" }}>Save as New</button>}
+              <button onClick={() => saveSheet(false)} disabled={!saveNameInput.trim()}
+                style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", padding: "10px", borderRadius: 8, cursor: saveNameInput.trim() ? "pointer" : "not-allowed", opacity: saveNameInput.trim() ? 1 : .5 }}>
+                {currentSheetId ? "Update" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showLoadDialog && (
+        <div onClick={() => setShowLoadDialog(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 420, width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "18px 20px 10px", fontSize: 16, fontWeight: 800, color: S.text }}>My Sheets</div>
+            <div style={{ overflowY: "auto", padding: "0 20px 20px" }}>
+              {!savedSheetsLoaded ? (
+                <div style={{ fontSize: 12, color: S.muted, padding: "20px 0" }}>Loading...</div>
+              ) : savedSheets.length === 0 ? (
+                <div style={{ fontSize: 12, color: S.muted, padding: "20px 0" }}>No saved lists yet. Build a sheet and hit Save List.</div>
+              ) : savedSheets.map(s => (
+                <div key={s.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid " + S.border }}>
+                  <div onClick={() => loadSheet(s)} style={{ cursor: "pointer", flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{s.name}</div>
+                    <div style={{ fontSize: 10, color: S.muted }}>{(s.items || []).length} products · {s.district === "wtx" ? "West TX" : "East TX"} · {s.tier} · {new Date(s.updated_at).toLocaleDateString()}</div>
+                  </div>
+                  <button onClick={() => deleteSavedSheet(s.id)} style={{ background: "none", border: "none", color: S.muted, fontSize: 15, cursor: "pointer", padding: "4px 8px" }}>✕</button>
+                </div>
+              ))}
+            </div>
+            <div style={{ padding: "0 20px 20px" }}>
+              <button onClick={() => setShowLoadDialog(false)} style={{ width: "100%", fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px", borderRadius: 8, cursor: "pointer" }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showManageCats && (
+        <div onClick={() => setShowManageCats(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 460, width: "100%", maxHeight: "80vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "18px 20px 4px", fontSize: 16, fontWeight: 800, color: S.text }}>Manage Categories</div>
+            <div style={{ padding: "0 20px 10px", fontSize: 11, color: S.muted }}>Rename a category to clean up inconsistent imports — applies to every product in it, everywhere in the app.</div>
+            <div style={{ overflowY: "auto", padding: "0 20px 20px" }}>
+              {cats.filter(c => c !== "ALL").map(c => (
+                <CategoryRow key={c} cat={c} count={catCounts[c] || 0} color={colorForCategory(c)} onRename={renameCategoryEverywhere} onColorChange={setCategoryColorValue} />
+              ))}
+            </div>
+            {catError && <div style={{ padding: "0 20px 10px", fontSize: 11, color: "#ef4444" }}>{catError}</div>}
+            <div style={{ padding: "0 20px 20px" }}>
+              <button onClick={() => setShowManageCats(false)} style={{ width: "100%", fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px", borderRadius: 8, cursor: "pointer" }}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSavePrices && (
+        <div onClick={() => setShowSavePrices(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 640, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "18px 20px 4px", fontSize: 16, fontWeight: 800, color: S.text }}>Save Price Changes</div>
+            <div style={{ padding: "0 20px 10px", fontSize: 11, color: S.muted }}>
+              These are local what-ifs only — nothing's been written to Supabase yet. Review them, then generate the SQL below and run it yourself when you're ready.
+            </div>
+            <div style={{ overflowY: "auto", padding: "0 20px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["Product", "Tier", "Was", "Now", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(priceOverrides).map(([key, ov]) => (
+                    <tr key={key}>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.text }}>{ov.productName}{ov.pkg ? " (" + ov.pkg + ")" : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted, textTransform: "capitalize" }}>{ov.tier}{ov.tier !== "wholesale" ? " · " + (ov.dist === "wtx" ? "West" : "East") : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.muted, textAlign: "right" }}>{fmt(ov.originalPrice)}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.amber, fontWeight: 700, textAlign: "right" }}>{fmt(ov.newPrice)}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", textAlign: "right" }}>
+                        <button onClick={() => clearPriceOverride(key)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {generatedSql && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>SQL — review before running</div>
+                  <textarea readOnly value={generatedSql} rows={Math.min(10, Object.keys(priceOverrides).length + 1)}
+                    style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.green, fontFamily: "monospace", fontSize: 11, padding: 10, boxSizing: "border-box", resize: "vertical" }} />
+                  <button onClick={() => { navigator.clipboard?.writeText(generatedSql); }}
+                    style={{ marginTop: 6, fontSize: 11, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>📋 Copy SQL</button>
+                </div>
+              )}
+            </div>
+            <div style={{ padding: "14px 20px 20px", display: "flex", gap: 8 }}>
+              <button onClick={() => setShowSavePrices(false)} style={{ fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Close</button>
+              <button onClick={clearAllPriceOverrides} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
+              <button onClick={generatePriceSql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.amber, border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Generate SQL</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        #we-print-sheet { display: none; }
+        @media print {
+          #root { display: none !important; }
+          #we-print-sheet { display: block !important; position: static; width: 100%; background: #fff; color: #111; padding: 24px; }
+          #we-print-sheet table { border-collapse: collapse; width: 100%; }
+          #we-print-sheet th, #we-print-sheet td { border: 1px solid #ddd; padding: 7px 9px; text-align: left; font-size: 12px; }
+          #we-print-sheet th { background: #eef6f0; color: #1B5E20; text-transform: uppercase; letter-spacing: .5px; font-size: 9px; font-weight: 700; }
+          #we-print-sheet tbody tr:nth-child(even) { background: #fafafa; }
+          #we-print-sheet .num { text-align: right; font-variant-numeric: tabular-nums; }
+        }
+      `}</style>
+      {printPortalNode && ReactDOM.createPortal(
+        <div>
+          <div style={{ borderBottom: "3px solid #2d6b3f", paddingBottom: 10, marginBottom: 16 }}>
+            <div style={{ fontSize: 21, fontWeight: 800, color: "#1B5E20" }}>{printTitle || "WE Price Sheet"}</div>
+            <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>
+              {(dist === "wtx" ? "West TX" : "East TX")} · {tier === "wholesale" ? "Wholesale" : tier === "floor" ? "Floor" : "Target"} pricing · {new Date().toLocaleDateString()}
+            </div>
+          </div>
+          <table>
+            <thead>
+              <tr>
+                <th>Product</th>
+                {printCols.rate && <th className="num">Rate/ac</th>}
+                {printCols.cost && <th className="num">Cost</th>}
+                {printCols.price && <th className="num">Price</th>}
+                {printCols.costAc && <th className="num">Cost/ac</th>}
+                {printCols.priceAc && <th className="num">Price/ac</th>}
+                {printCols.profitAc && <th className="num">Profit/ac</th>}
+                {printCols.marginPct && <th className="num">Margin %</th>}
+                {printCols.notes && <th>Notes</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {groupedRows.map(group => (
+                <React.Fragment key={group.cat}>
+                  <tr>
+                    <td colSpan={1 + Object.values(printCols).filter(Boolean).length}
+                      style={{
+                        background: printColors ? colorForCategory(group.cat) : "#eee",
+                        color: printColors ? contrastTextFor(colorForCategory(group.cat)) : "#333",
+                        fontWeight: 800, fontSize: 11, textTransform: "uppercase", letterSpacing: .5, padding: "7px 10px"
+                      }}>{group.cat}</td>
+                  </tr>
+                  {group.items.map(r => (
+                    <tr key={r.p.item} style={printColors ? { background: catRowBg(r.p.cat) } : undefined}>
+                      <td style={{ fontWeight: 600, color: "#111" }}>{r.p.name}{r.p.pkg ? <span style={{ fontWeight: 400, color: "#777" }}>{" (" + r.p.pkg + ")"}</span> : ""}</td>
+                      {printCols.rate && <td className="num" style={{ color: S.blue, fontWeight: 700 }}>{r.p.rate_unit ? r.rate + " " + r.p.rate_unit : "—"}</td>}
+                      {printCols.cost && <td className="num">
+                        <div style={{ color: "#333" }}>{fmt(r.cost)}</div>
+                        <div style={{ fontSize: 9, color: "#888", fontWeight: 400 }}>{r.costSource}</div>
+                      </td>}
+                      {printCols.price && <td className="num">
+                        <div style={{ color: "#111", fontWeight: 700 }}>{fmt(r.price)}</div>
+                        <div style={{ fontSize: 9, color: "#888", fontWeight: 400 }}>{r.label}</div>
+                      </td>}
+                      {printCols.costAc && <td className="num" style={{ color: "#333" }}>{r.costAc != null ? fmtAc(r.costAc) : "—"}</td>}
+                      {printCols.priceAc && <td className="num" style={{ color: "#333" }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>}
+                      {printCols.profitAc && <td className="num" style={{ color: r.profitAc == null ? "#888" : r.profitAc >= 0 ? "#2d6b3f" : "#c62828", fontWeight: 800 }}>{r.profitAc != null ? fmtAc(r.profitAc) : "—"}</td>}
+                      {printCols.marginPct && <td className="num" style={{ color: r.marginPct == null ? "#888" : "#2d6b3f", fontWeight: 700 }}>{r.marginPct != null ? r.marginPct.toFixed(0) + "%" : "—"}</td>}
+                      {printCols.notes && <td style={{ color: "#444", fontSize: 10 }}>{r.note || ""}</td>}
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+        printPortalNode
+      )}
+    </div>
+  );
+}
+
+// Solid colored divider row shown between category groups in My Sheet --
+// click the label to rename the category (same renameCategoryEverywhere used
+// in Manage Categories, just editable inline here too since that's the more
+// natural place to fix a label while you're staring at a specific sheet).
+function SheetGroupHeader({ cat, count, color, textColor, colSpan, onRename, canDrag, isDragging, isDragOver, onHandleDragStart, onHandleDragEnd, onRowDragOver, onRowDrop }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(cat);
+  const [saving, setSaving] = useState(false);
+  async function commit() {
+    if (!val.trim() || val.trim() === cat) { setEditing(false); return; }
+    setSaving(true);
+    await onRename(cat, val.trim());
+    setSaving(false);
+    setEditing(false);
+  }
+  return (
+    <tr onDragOver={onRowDragOver} onDrop={onRowDrop}
+      style={{ opacity: isDragging ? .4 : 1, outline: isDragOver ? "2px solid " + S.blue : "none", outlineOffset: -2 }}>
+      <td colSpan={colSpan} style={{ background: color, padding: "6px 10px" }}>
+        {editing ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }} onClick={e => e.stopPropagation()}>
+            <input autoFocus value={val} onChange={e => setVal(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setVal(cat); setEditing(false); } }}
+              style={{ flex: 1, maxWidth: 260, background: "rgba(255,255,255,.15)", border: "1px solid " + textColor, borderRadius: 5, color: textColor, fontSize: 11, fontWeight: 800, padding: "3px 7px", outline: "none" }} />
+            <button onClick={commit} disabled={saving} style={{ fontSize: 10, fontWeight: 700, color: color, background: textColor, border: "none", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>{saving ? "..." : "Save"}</button>
+            <button onClick={() => { setVal(cat); setEditing(false); }} style={{ fontSize: 10, color: textColor, background: "none", border: "none", cursor: "pointer", opacity: .8 }}>Cancel</button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            {canDrag && (
+              <span draggable onDragStart={onHandleDragStart} onDragEnd={onHandleDragEnd}
+                style={{ cursor: "grab", color: textColor, opacity: .75, fontSize: 14, userSelect: "none", touchAction: "none" }}
+                title="Drag to reorder this product group">⠿</span>
+            )}
+            <div onClick={() => setEditing(true)} title="Click to rename this category"
+              style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+              <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: .5, textTransform: "uppercase", color: textColor }}>{cat}</span>
+              <span style={{ fontSize: 9, fontWeight: 600, color: textColor, opacity: .75 }}>{count} product{count === 1 ? "" : "s"}</span>
+              <span style={{ fontSize: 10, color: textColor, opacity: .6 }}>✎</span>
+            </div>
+          </div>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function CategoryRow({ cat, count, color, onRename, onColorChange }) {
+  const [editing, setEditing] = useState(false);
+  const [val, setVal] = useState(cat);
+  const [saving, setSaving] = useState(false);
+  const [showPicker, setShowPicker] = useState(false);
+  async function commit() {
+    if (!val.trim() || val.trim() === cat) { setEditing(false); return; }
+    setSaving(true);
+    await onRename(cat, val.trim());
+    setSaving(false);
+    setEditing(false);
+  }
+  return (
+    <div style={{ padding: "8px 0", borderBottom: "1px solid " + S.border }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {editing ? (
+          <React.Fragment>
+            <input autoFocus value={val} onChange={e => setVal(e.target.value)} onKeyDown={e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { setVal(cat); setEditing(false); } }}
+              style={{ flex: 1, background: S.inputBg, border: "1px solid " + S.blue, borderRadius: 6, color: S.text, fontSize: 12, padding: "6px 8px", outline: "none" }} />
+            <button onClick={commit} disabled={saving} style={{ fontSize: 11, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 6, padding: "6px 10px", cursor: "pointer" }}>{saving ? "..." : "Save"}</button>
+            <button onClick={() => { setVal(cat); setEditing(false); }} style={{ fontSize: 11, color: S.muted, background: "none", border: "none", cursor: "pointer" }}>Cancel</button>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <button onClick={() => setShowPicker(v => !v)} title="Change color"
+              style={{ width: 18, height: 18, borderRadius: "50%", background: color, border: "2px solid " + (showPicker ? S.text : "transparent"), cursor: "pointer", flexShrink: 0, padding: 0 }} />
+            <div style={{ flex: 1, fontSize: 12, color: S.text }}>{cat}</div>
+            <div style={{ fontSize: 10, color: S.muted }}>{count} product{count === 1 ? "" : "s"}</div>
+            <button onClick={() => setEditing(true)} style={{ fontSize: 11, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", borderRadius: 6, padding: "5px 9px", cursor: "pointer" }}>Rename</button>
+          </React.Fragment>
+        )}
+      </div>
+      {showPicker && !editing && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, paddingLeft: 26 }}>
+          {CATEGORY_COLOR_PRESETS.map(sw => (
+            <button key={sw.hex} title={sw.name} onClick={() => { onColorChange(cat, sw.hex); setShowPicker(false); }}
+              style={{ width: 20, height: 20, borderRadius: "50%", background: sw.hex, border: "2px solid " + (color === sw.hex ? S.text : "transparent"), cursor: "pointer", padding: 0 }} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ═══ MAIN APP ═══
 function App() {
   const [session, setSession] = useState(null);
@@ -1828,6 +3048,7 @@ function App() {
 
   const [txData, setTxData] = useState([]);
   const [natData, setNatData] = useState([]);
+  const [landedCosts, setLandedCosts] = useState({}); // { [item]: { etx: {...}, wtx: {...} } } -- shared by ProductCard and ProfitSheet
   const [overridesMap, setOverridesMap] = useState({});
   const [locations, setLocations] = useState([]);
   const [organicNames, setOrganicNames] = useState(new Set());
@@ -1841,6 +3062,16 @@ function App() {
   const searchRef = useRef(null);
 
   const [favorites, setFavorites] = useState(new Set()); // Set of sku_item integers
+
+  // Light/dark skin toggle. S itself is mutated (see applyThemeMode) --
+  // this state exists purely to force the re-render that picks the mutation up.
+  const [themeMode, setThemeMode] = useState(loadThemeMode);
+  function toggleThemeMode() {
+    const next = themeMode === "light" ? "dark" : "light";
+    applyThemeMode(next);
+    setThemeMode(next);
+    Analytics.track("theme_toggle", { mode: next });
+  }
 
   useEffect(() => {
     let subscription;
@@ -1880,10 +3111,21 @@ function App() {
         Analytics.track("login", { role: prof.role, district: prof.district });
 
         const { data: tx } = await supabaseClient.from("v_tx_pricing").select("*").order("name");
-        setTxData(tx || []);
+        const { data: catOverrides } = await supabaseClient.from("product_category_overrides").select("*");
+        const catOverrideMap = {};
+        (catOverrides || []).forEach(o => { catOverrideMap[o.sku_item] = o.category; });
+        setTxData((tx || []).map(p => catOverrideMap[p.item] ? { ...p, cat: catOverrideMap[p.item] } : p));
 
         const { data: nat } = await supabaseClient.from("national_prices").select("*").order("name");
         setNatData(nat || []);
+
+        const { data: landed } = await supabaseClient.from("landed_costs").select("*");
+        const landedMap = {};
+        (landed || []).forEach(row => {
+          if (!landedMap[row.sku_item]) landedMap[row.sku_item] = {};
+          landedMap[row.sku_item][row.district_id] = row;
+        });
+        setLandedCosts(landedMap);
 
         const { data: overrides } = await supabaseClient.from("v_location_overrides").select("*");
         const oMap = {};
@@ -2032,6 +3274,13 @@ function App() {
 
   const isAdmin = profile.role === "admin" || profile.role === "viewer_admin";
   const hideCost = profile.role === "viewer_admin";
+  // Sheet/Ladder/category-editing access: Admin + Manager roles only. NOT the
+  // same gate as hideCost -- hideCost only governs the admin-style card's
+  // cost cells for viewer_admin; it does NOT exclude sales/viewer roles from
+  // anything, because those roles never reach the cost-bearing card branch
+  // in the first place (isAdmin gates that separately). Sheet mode is a new
+  // surface that needed its own explicit role check.
+  const canUseSheet = profile.role === "admin" || profile.role === "manager";
   const dist = profile.district;
   const loc = profile.location_ids?.[0] || null;
   const locIds = profile.location_ids || [];
@@ -2052,7 +3301,7 @@ function App() {
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
 
-  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite };
+  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite, landedCosts };
 
   async function toggleFavorite(item) {
     const userId = session?.user?.id;
@@ -2138,21 +3387,30 @@ function App() {
       <header style={{ background: S.headerBg, borderBottom: "2px solid " + S.greenDim, padding: "12px 14px 8px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: appMode === "calc" ? S.amber : appMode === "analytics" ? S.purple : S.green, letterSpacing: .5, textTransform: "uppercase" }}>{appMode === "calc" ? "⚡ Blend Calculator" : appMode === "analytics" ? "📊 Analytics" : "📋 Price Lookup"}</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: appMode === "calc" ? S.amber : appMode === "analytics" ? S.purple : appMode === "sheet" ? S.blue : S.green, letterSpacing: .5, textTransform: "uppercase" }}>{appMode === "calc" ? "⚡ Blend Calculator" : appMode === "analytics" ? "📊 Analytics" : appMode === "sheet" ? "🧮 Profit Sheet" : "📋 Price Lookup"}</div>
             <div style={{ fontSize: 10, color: S.muted, letterSpacing: 2, textTransform: "uppercase", marginTop: 1 }}>2026 TX Branded · Wilbur-Ellis{isAdmin ? "" : " · " + districtLabel}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {profile.role === "admin" && (
               <button onClick={() => { setAppMode(appMode === "analytics" ? "prices" : "analytics"); }}
-                style={{ fontSize: 10, fontWeight: 700, color: appMode === "analytics" ? "#0f1410" : S.purple, background: appMode === "analytics" ? S.purple : "rgba(176,125,232,.1)", border: "1px solid " + (appMode === "analytics" ? S.purple : "rgba(176,125,232,.3)"), padding: "4px 8px", borderRadius: 6, cursor: "pointer", letterSpacing: .5 }}>
+                style={{ fontSize: 10, fontWeight: 700, color: appMode === "analytics" ? S.onAccent : S.purple, background: appMode === "analytics" ? S.purple : "rgba(176,125,232,.1)", border: "1px solid " + (appMode === "analytics" ? S.purple : "rgba(176,125,232,.3)"), padding: "4px 8px", borderRadius: 6, cursor: "pointer", letterSpacing: .5 }}>
                 📊
               </button>
             )}
+            {canUseSheet && (
+              <button onClick={() => { const next = appMode === "sheet" ? "prices" : "sheet"; setAppMode(next); Analytics.track("page_view", { mode: next }); }}
+                style={{ fontSize: 10, fontWeight: 700, color: appMode === "sheet" ? S.onAccent : S.blue, background: appMode === "sheet" ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (appMode === "sheet" ? S.blue : "rgba(91,155,213,.3)"), padding: "4px 10px", borderRadius: 6, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, letterSpacing: .5, transition: "all .2s" }}>
+                {appMode === "sheet" ? "📋 PRICES" : "🧮 SHEET"}
+              </button>
+            )}
             <button onClick={() => { const next = appMode === "prices" ? "calc" : "prices"; setAppMode(next); Analytics.track("page_view", { mode: next }); }}
-              style={{ fontSize: 10, fontWeight: 700, color: appMode === "calc" ? "#0f1410" : S.amber, background: appMode === "calc" ? S.amber : "rgba(232,162,48,.1)", border: "1px solid " + (appMode === "calc" ? S.amber : "rgba(232,162,48,.3)"), padding: "4px 10px", borderRadius: 6, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, letterSpacing: .5, transition: "all .2s" }}>
+              style={{ fontSize: 10, fontWeight: 700, color: appMode === "calc" ? S.onAccent : S.amber, background: appMode === "calc" ? S.amber : "rgba(232,162,48,.1)", border: "1px solid " + (appMode === "calc" ? S.amber : "rgba(232,162,48,.3)"), padding: "4px 10px", borderRadius: 6, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, letterSpacing: .5, transition: "all .2s" }}>
               {appMode === "calc" ? "📋 PRICES" : "⚡ CALC"}
             </button>
-            <span style={{ fontSize: 10, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "3px 8px", borderRadius: 4 }}>{txData.length + " TX + " + natData.length + " Nat"}</span>
+            <button onClick={toggleThemeMode} title={themeMode === "light" ? "Switch to dark mode" : "Switch to light mode"}
+              style={{ fontSize: 13, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "3px 8px", borderRadius: 4, cursor: "pointer", lineHeight: 1.4 }}>
+              {themeMode === "light" ? "🌙" : "☀️"}
+            </button>
             <button onClick={handleLogout} style={{ fontSize: 10, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "3px 8px", borderRadius: 4, cursor: "pointer" }}>Logout</button>
           </div>
         </div>
@@ -2195,6 +3453,14 @@ function App() {
 
       {appMode === "calc" && (
         <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} />
+      )}
+
+      {canUseSheet && (
+        <div style={{ display: appMode === "sheet" ? "block" : "none" }}>
+          <ProfitSheet defaultDistrict={dist} txData={txData} overridesMap={overridesMap} session={session} canEdit={canUseSheet} landedCosts={landedCosts} labelUrls={labelUrls}
+            onCategoryChange={(item, newCat) => setTxData(prev => prev.map(p => p.item === item ? { ...p, cat: newCat } : p))}
+            onBulkCategoryChange={(oldCat, newCat) => setTxData(prev => prev.map(p => p.cat === oldCat ? { ...p, cat: newCat } : p))} />
+        </div>
       )}
 
       {appMode === "analytics" && (
