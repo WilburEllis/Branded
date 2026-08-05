@@ -169,6 +169,23 @@ function calcPPA(pkg, price, rateMin, rateUnit, sprayVol, dryOzPrice, ozPerUnit)
   return { val: (price / upg) * rateMin, per100: false };
 }
 
+// For "dry oz price" products (EMPLOY's 3 SKUs, as of 2026-08), Cost/Target/
+// Floor are all stored per-PACKAGE (calcPPA's dryOzPrice branch divides by
+// oz_per_unit to get an effective $/oz), but `skus.wholesale` is stored as
+// an already-flat $/oz rate -- same $9.75 across all 3 EMPLOY package sizes,
+// unlike Cost which correctly scales ($52/$104/$130). Feeding raw
+// p.wholesale into the same divide-by-oz_per_unit math as Cost/Target/Floor
+// silently produces a Price/ac (and Margin%) far below Cost/ac -- caught by
+// Nathan 2026-08-04 on the 5 LB bag (Wholesale Price/ac was $0.30/ac vs.
+// $3.25/ac Cost/ac). This helper normalizes wholesale onto the same
+// per-package basis everything else uses, so it flows correctly through
+// calcPPA/PriceCell margin math without a special case at every call site.
+// generatePriceSql() below converts back to the raw per-oz rate when writing
+// SQL, since that's what the `skus.wholesale` column actually stores.
+function wholesaleBasis(p) {
+  return (p.dry_oz_price && p.oz_per_unit) ? p.wholesale * p.oz_per_unit : p.wholesale;
+}
+
 function calcNTreatPPA(pricePerGal, rateQtPerTon, uanGalPerAcre) {
   if (!pricePerGal || !rateQtPerTon) return null;
   return (uanGalPerAcre * (rateQtPerTon / 4) * pricePerGal) / 180;
@@ -482,7 +499,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     // Wholesale as clickable price cell -- no district of its own, so it
     // uses the viewing admin/manager's home district's landed cost.
     const wsCells = [];
-    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: p.wholesale, c: S.purple, cellCost: homeCostR.cost });
+    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: wholesaleBasis(p), c: S.purple, cellCost: homeCostR.cost });
 
     const adminSel = useFloor || (collapsedCells[0]?.k || "w_target");
     const allAdminCells = [...collapsedCells, ...expandedCells, ...locTargetCells, ...locFloorCells, ...wsCells];
@@ -742,7 +759,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       activePrice = target; activePriceLabel = "Target";
     }
   } else if (priceMode === "ws" && p.wholesale) {
-    activePrice = p.wholesale;
+    activePrice = wholesaleBasis(p);
     activePriceLabel = "Wholesale";
   } else if (priceMode === "floor") {
     activePrice = floor;
@@ -754,7 +771,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
   // Wholesale for Lonestar reps
   const isLonestar = !isNational && location === "ls";
-  const wholesale = isLonestar ? p.wholesale : null;
+  const wholesale = isLonestar ? wholesaleBasis(p) : null;
 
   const labelUrl = labelUrls[p.name];
   const rateStr = p.rate_min != null && p.rate_unit ? (p.rate_min === p.rate_max ? p.rate_min + " " + p.rate_unit : p.rate_min + "-" + p.rate_max + " " + p.rate_unit) : null;
@@ -864,7 +881,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 
         let mgrPrice, mgrPriceLabel;
         if (priceMode === "ws" && p.wholesale) {
-          mgrPrice = p.wholesale; mgrPriceLabel = "Wholesale";
+          mgrPrice = wholesaleBasis(p); mgrPriceLabel = "Wholesale";
         } else if (priceMode.startsWith("loc:") || priceMode.startsWith("loc_floor:")) {
           const isLF = priceMode.startsWith("loc_floor:");
           const lid = priceMode.split(":")[1];
@@ -902,7 +919,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
             <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
               {isLsMgr && p.wholesale != null && p.wholesale > 0 && (
                 <div style={{ display: "grid", gridTemplateColumns: "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-                  <PriceCell k="ws" l="Wholesale" v={p.wholesale} c={S.purple} sel={priceMode} onSel={setPriceMode} showMargin={true} />
+                  <PriceCell k="ws" l="Wholesale" v={wholesaleBasis(p)} c={S.purple} sel={priceMode} onSel={setPriceMode} showMargin={true} />
                 </div>
               )}
               {renderPPA(mgrPrice, mgrPriceLabel)}
@@ -2222,7 +2239,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   // when only floor is missing but target has real district data -- worth
   // fixing there too if you want, didn't touch it since it wasn't asked.)
   function rawPriceFor(p) {
-    if (tier === "wholesale") return { price: p.wholesale, label: "Wholesale", isNat: false };
+    if (tier === "wholesale") return { price: wholesaleBasis(p), label: "Wholesale", isNat: false };
     const isWest = dist === "wtx";
     const rawTarget = isWest ? p.w_target : p.e_target;
     const rawFloor = isWest ? p.w_floor : p.e_floor;
@@ -2263,6 +2280,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         item: p.item, productName: p.name, pkg: p.pkg,
         tier, dist: tier === "wholesale" ? "any" : dist, isNat: raw.isNat,
         newPrice, originalPrice: prev[key] ? prev[key].originalPrice : raw.price,
+        dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
       },
     }));
     Analytics.track("sheet_price_override", { item: p.item, tier, newPrice });
@@ -2279,7 +2297,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     const lines = Object.values(priceOverrides).map(ov => {
       const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
       if (ov.tier === "wholesale") {
-        return `UPDATE public.skus SET wholesale = ${ov.newPrice} WHERE item = ${ov.item}; -- ${tag}`;
+        // Sheet edits happen in the same per-package basis as Cost/Target/
+        // Floor (see wholesaleBasis()), but skus.wholesale actually stores
+        // a flat per-oz rate for dry-oz-priced products -- convert back
+        // before writing so the saved value matches what the column means.
+        const rawWholesale = (ov.dryOzPrice && ov.ozPerUnit) ? ov.newPrice / ov.ozPerUnit : ov.newPrice;
+        return `UPDATE public.skus SET wholesale = ${rawWholesale} WHERE item = ${ov.item}; -- ${tag}`;
       }
       const col = ov.tier === "floor" ? "floor_price" : "target_price";
       if (ov.isNat) {
