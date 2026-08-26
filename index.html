@@ -1086,6 +1086,7 @@ function AnalyticsDashboard() {
     const searches = rows.filter(r => r.event_type === "search");
     const pageViews = rows.filter(r => r.event_type === "page_view");
     const calcEvents = rows.filter(r => r.event_type.startsWith("calc_"));
+    const commodityEvents = rows.filter(r => r.event_type === "calc_commodity");
     const heartbeats = rows.filter(r => r.event_type === "session_heartbeat" || r.event_type === "login");
 
     // Unique users
@@ -1174,6 +1175,45 @@ function AnalyticsDashboard() {
     });
     const topInfoClicks = Object.entries(infoClickCounts).sort((a, b) => b[1] - a[1]).slice(0, 10);
 
+    // ── Profit Sheet tool activity ──
+    // Small helper: aggregate any event list by an event_data field into a
+    // sorted [name, count] list, same shape as every topXxx list above.
+    const topByField = (list, field, limit = 10) => {
+      const counts = {};
+      list.forEach(r => { const v = r.event_data?.[field]; if (v) counts[v] = (counts[v] || 0) + 1; });
+      return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit);
+    };
+
+    const sheetAddEvents = rows.filter(r => r.event_type === "sheet_add_product");
+    const sheetRemoveEvents = rows.filter(r => r.event_type === "sheet_remove_product");
+    const sheetSavedEvents = rows.filter(r => r.event_type === "sheet_saved");
+    const sheetLoadedEvents = rows.filter(r => r.event_type === "sheet_loaded");
+    const sheetClearEvents = rows.filter(r => r.event_type === "sheet_clear");
+    const sheetRateChangeEvents = rows.filter(r => r.event_type === "sheet_rate_changed");
+    // Price edits happen from two places (My Sheet's own per-item edits, and
+    // the Value Ladder what-if scratchpad) under two different event names --
+    // combine them for "prices changed" since both are a real price edit.
+    const priceChangeEvents = rows.filter(r => r.event_type === "sheet_item_price_override" || r.event_type === "sheet_price_override");
+    const costChangeEvents = rows.filter(r => r.event_type === "sheet_item_cost_override");
+    const exportEvents = rows.filter(r => r.event_type === "sheet_export_excel");
+    const printEvents = rows.filter(r => r.event_type === "sheet_print");
+    const themeToggleEvents = rows.filter(r => r.event_type === "theme_toggle");
+    const themeDarkCount = themeToggleEvents.filter(r => r.event_data?.mode === "dark").length;
+    const themeLightCount = themeToggleEvents.filter(r => r.event_data?.mode === "light").length;
+
+    const topSheetAdds = topByField(sheetAddEvents, "product");
+    const topPriceChanges = topByField(priceChangeEvents, "product");
+    const topCostChanges = topByField(costChangeEvents, "product");
+    const topCommodities = topByField(commodityEvents, "product");
+
+    // All-time saved sheets (the actual live count, not a "how many times did
+    // someone hit Save" event count, which would double-count re-saves of
+    // the same sheet) -- same pattern as the Favorites query below: read the
+    // real table directly rather than inferring it from the event log.
+    const { data: sheetTableRows } = await supabaseClient.from("saved_sheets").select("name, district, tier, updated_at").order("updated_at", { ascending: false });
+    const totalSavedSheets = (sheetTableRows || []).length;
+    const recentSheets = (sheetTableRows || []).slice(0, 15);
+
     // Daily usage timeline
     const dailyUsage = {};
     rows.forEach(r => {
@@ -1217,12 +1257,21 @@ function AnalyticsDashboard() {
     setData({
       totalEvents: rows.length, uniqueUsers, logins: logins.length,
       searches: searches.length, topSearches, calcViews, priceViews,
-      sessionList: sessionList.slice(0, 20), topVA, userList,
+      sessionList: sessionList.slice(0, 20), topVA, topCommodities, userList,
       topProductViews, topLabelSearches, topRateChanges,
       productViewCount: productViews.length, labelSearchCount: labelSearches.length, rateChangeCount: rateChanges.length,
       infoClickCount: infoClicks.length, topInfoClicks,
       timelineData, hourlyUsage,
       topFavorites, totalFavorites,
+      // Profit Sheet tool
+      sheetAddCount: sheetAddEvents.length, sheetRemoveCount: sheetRemoveEvents.length,
+      sheetSavedCount: sheetSavedEvents.length, sheetLoadedCount: sheetLoadedEvents.length, sheetClearCount: sheetClearEvents.length,
+      sheetRateChangeCount: sheetRateChangeEvents.length,
+      priceChangeCount: priceChangeEvents.length, topPriceChanges,
+      costChangeCount: costChangeEvents.length, topCostChanges,
+      exportCount: exportEvents.length, printCount: printEvents.length,
+      topSheetAdds, totalSavedSheets, recentSheets,
+      themeDarkCount, themeLightCount,
       rawRows: rows
     });
     setLoading(false);
@@ -1313,6 +1362,62 @@ function AnalyticsDashboard() {
           <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_data?.enabled ? "enabled" : "disabled"}</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product}</span></span>
           <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
         </div>;
+      case "sheet_add_product":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>added</span> <span style={{ color: S.green, fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>to their sheet</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_remove_product":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>removed item #{r.event_data?.item} from their sheet</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_item_price_override":
+      case "sheet_price_override":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>changed price on</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product || "item #" + r.event_data?.item}</span> <span style={{ color: S.muted }}>to</span> <span style={{ fontWeight: 600 }}>{fmt(r.event_data?.newPrice)}</span> <span style={{ color: S.muted, fontSize: 10 }}>({r.event_type === "sheet_price_override" ? "Value Ladder" : "My Sheet"}{r.event_data?.tier ? ", " + r.event_data.tier : ""})</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_item_cost_override":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>entered a landed cost on</span> <span style={{ color: S.blue, fontWeight: 600 }}>{r.event_data?.product || "item #" + r.event_data?.item}</span> <span style={{ color: S.muted }}>of</span> <span style={{ fontWeight: 600 }}>{fmt(r.event_data?.newCost)}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_saved":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>saved sheet</span> <span style={{ color: S.green, fontWeight: 600 }}>{r.event_data?.name}</span> <span style={{ color: S.muted }}>({r.event_data?.count} products)</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_loaded":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>opened saved sheet</span> <span style={{ color: S.green, fontWeight: 600 }}>{r.event_data?.name}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_export_excel":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>exported</span> <span style={{ fontWeight: 600 }}>{r.event_data?.count} products</span> <span style={{ color: S.muted }}>to Excel ({r.event_data?.district === "wtx" ? "West" : "East"} TX, {r.event_data?.tier})</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_print":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>printed/saved PDF</span> <span style={{ color: S.blue, fontWeight: 600 }}>{r.event_data?.title}</span> <span style={{ color: S.muted }}>({r.event_data?.count} products{r.event_data?.bidMode ? ", Bid Mode" : ""})</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "theme_toggle":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>switched to</span> <span style={{ color: r.event_data?.mode === "light" ? S.amber : S.purple, fontWeight: 600 }}>{r.event_data?.mode} mode</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_rate_changed":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>changed rate on item #{r.event_data?.item} to</span> <span style={{ fontWeight: 600 }}>{r.event_data?.rate}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "sheet_clear":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>cleared their sheet</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
       default:
         return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
           <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_type}</span></span>
@@ -1400,6 +1505,55 @@ function AnalyticsDashboard() {
             <div style={cs} onClick={() => openDrill("Product Info Viewed", "product_info_click")}>
               <div style={{ ...metricStyle, fontSize: 24, color: "#818cf8" }}>{data.infoClickCount}</div>
               <div style={metricLabel}>Info Clicked ▸</div>
+            </div>
+          </div>
+
+          {/* PROFIT SHEET TOOL METRICS */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: .5, margin: "4px 2px 8px" }}>🧮 Profit Sheet Tool</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div style={cs} onClick={() => openDrill("Products Added to Sheets", "sheet_add_product")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.green }}>{data.sheetAddCount}</div>
+              <div style={metricLabel}>Products Added ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Prices Changed", null, r => r.event_type === "sheet_item_price_override" || r.event_type === "sheet_price_override")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.amber }}>{data.priceChangeCount}</div>
+              <div style={metricLabel}>Prices Changed ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Costs Changed", "sheet_item_cost_override")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.blue }}>{data.costChangeCount}</div>
+              <div style={metricLabel}>Costs Changed ▸</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("Excel Exports", "sheet_export_excel")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#4caf6a" }}>{data.exportCount}</div>
+              <div style={metricLabel}>Exports ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Prints / PDFs", "sheet_print")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#5b9bd5" }}>{data.printCount}</div>
+              <div style={metricLabel}>Prints / PDFs ▸</div>
+            </div>
+            <div style={{ ...cs, cursor: "default" }}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.purple }}>{data.totalSavedSheets}</div>
+              <div style={metricLabel}>Sheets Saved (all-time)</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("Sheet Rate Changes", "sheet_rate_changed")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.sheetRateChangeCount}</div>
+              <div style={metricLabel}>Rate/ac Changed ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Sheets Opened", "sheet_loaded")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.sheetLoadedCount}</div>
+              <div style={metricLabel}>Sheets Opened ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Products Removed", "sheet_remove_product")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.sheetRemoveCount}</div>
+              <div style={metricLabel}>Removed ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Sheets Cleared", "sheet_clear")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.sheetClearCount}</div>
+              <div style={metricLabel}>Sheets Cleared ▸</div>
             </div>
           </div>
 
@@ -1494,6 +1648,107 @@ function AnalyticsDashboard() {
             </div>
           )}
 
+          {/* PRODUCTS ADDED TO SHEETS */}
+          {data.topSheetAdds.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🧮 Most Added to Sheets</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topSheetAdds.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.green }}>{count}x added</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* PRICES CHANGED -- which products */}
+          {data.topPriceChanges.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>💲 Prices Changed — Which Products</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topPriceChanges.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.amber }}>{count}x changed</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* COSTS CHANGED -- which products (landed cost dial-in) */}
+          {data.topCostChanges.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>💰 Costs Changed — Which Products</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topCostChanges.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.blue }}>{count}x changed</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* SAVED SHEETS -- all-time, direct from saved_sheets (not the event log, so re-saves don't inflate the count) */}
+          <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span>📄 Saved Sheets</span>
+              <span style={{ fontSize: 11, color: S.purple, fontWeight: 600 }}>{data.totalSavedSheets} total</span>
+            </div>
+            <div style={{ padding: "8px 14px 14px" }}>
+              {data.recentSheets.map((s, i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                  <span style={{ fontWeight: 500 }}>{s.name}</span>
+                  <span style={{ color: S.muted, fontSize: 10 }}>{s.district === "wtx" ? "West" : "East"} TX · {s.tier} · {new Date(s.updated_at).toLocaleDateString()}</span>
+                </div>
+              ))}
+              {data.recentSheets.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>No saved sheets yet</div>}
+              {/* If this ever shows fewer sheets than expected, the saved_sheets
+                  RLS SELECT policy may be scoped to auth.uid() = user_id --
+                  i.e. an admin/manager viewing Analytics only sees their OWN
+                  saved sheets, not the whole team's. Widen the SELECT policy
+                  to admin/manager if company-wide visibility is needed here. */}
+            </div>
+          </div>
+
+          {/* PRINTS / EXPORTS */}
+          {(data.printCount > 0 || data.exportCount > 0) && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🖨️ Prints & Exports</div>
+              <div style={{ padding: "8px 14px 14px", display: "flex", gap: 20 }}>
+                <div onClick={() => openDrill("Prints / PDFs", "sheet_print")} style={{ cursor: "pointer" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: S.blue }}>{data.printCount}</div>
+                  <div style={metricLabel}>Prints / PDFs ▸</div>
+                </div>
+                <div onClick={() => openDrill("Excel Exports", "sheet_export_excel")} style={{ cursor: "pointer" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: S.green }}>{data.exportCount}</div>
+                  <div style={metricLabel}>Excel Exports ▸</div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* THEME PREFERENCE */}
+          {(data.themeDarkCount + data.themeLightCount) > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🌗 Theme Toggles</div>
+              <div style={{ padding: "8px 14px 14px", display: "flex", gap: 20 }}>
+                <div onClick={() => openDrill("Switched to Dark", null, r => r.event_type === "theme_toggle" && r.event_data?.mode === "dark")} style={{ cursor: "pointer" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: S.purple }}>{data.themeDarkCount}</div>
+                  <div style={metricLabel}>To Dark ▸</div>
+                </div>
+                <div onClick={() => openDrill("Switched to Light", null, r => r.event_type === "theme_toggle" && r.event_data?.mode === "light")} style={{ cursor: "pointer" }}>
+                  <div style={{ fontSize: 20, fontWeight: 800, color: S.amber }}>{data.themeLightCount}</div>
+                  <div style={metricLabel}>To Light ▸</div>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* USER ACTIVITY */}
           <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
             <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>👤 User Activity</div>
@@ -1551,6 +1806,20 @@ function AnalyticsDashboard() {
           </div>
 
           {/* POPULAR CALC PRODUCTS */}
+          {data.topCommodities.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>⚡ Blend Calc — Commodities Selected</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topCommodities.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: S.amber }}>{count}x selected</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {data.topVA.length > 0 && (
             <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
               <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>🚀 Most Toggled Value-Add Products</div>
@@ -1974,8 +2243,20 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   }
   const [showPrintPanel, setShowPrintPanel] = useState(false);
   const [printTitle, setPrintTitle] = useState("");
-  const [printCols, setPrintCols] = useState({ rate: true, cost: false, price: true, costAc: false, priceAc: true, profitAc: false, marginPct: false, notes: false });
+  const [printCols, setPrintCols] = useState({ rate: true, cost: false, price: true, priceLabel: true, costAc: false, priceAc: true, profitAc: false, marginPct: false, notes: false });
   const [printColors, setPrintColors] = useState(true);
+  const [printShowSubheader, setPrintShowSubheader] = useState(true); // the "East TX · Wholesale pricing · <date>" line
+  const [bidMode, setBidMode] = useState(false);
+  // Bid Mode is a convenience action, not a locked/derived state -- checking
+  // it hides the two internal-facing signals (price tier/edited label, the
+  // district+tier subheader) that Nathan doesn't want a customer seeing on a
+  // bid sheet; unchecking restores both. The two underlying checkboxes stay
+  // independently editable at any time either way.
+  function toggleBidMode(checked) {
+    setBidMode(checked);
+    setPrintCols(prev => ({ ...prev, priceLabel: !checked }));
+    setPrintShowSubheader(!checked);
+  }
   const searchRef = useRef(null);
 
   // ── N-Dure (UAN/Urea) sheet-wide comparison rate ──
@@ -2284,7 +2565,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     setSheetItems(prev => prev.map(si => si.item === p.item
       ? { ...si, price: newPrice, priceTier: tier, priceDist: tier === "wholesale" ? "any" : dist }
       : si));
-    Analytics.track("sheet_item_price_override", { item: p.item, tier, dist, newPrice });
+    Analytics.track("sheet_item_price_override", { item: p.item, product: p.name, tier, dist, newPrice });
   }
   function clearSheetItemPrice(item) {
     setSheetItems(prev => prev.map(si => si.item === item
@@ -2298,11 +2579,11 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   // location right on the sheet, overriding whatever landed_costs/skus.cost
   // currently shows, so his Profit/ac and Margin% are accurate even before
   // (or instead of) a full landed-cost re-import.
-  function setSheetItemCost(item, newCost) {
-    setSheetItems(prev => prev.map(si => si.item === item
+  function setSheetItemCost(p, newCost) {
+    setSheetItems(prev => prev.map(si => si.item === p.item
       ? { ...si, cost: newCost, costDist: dist }
       : si));
-    Analytics.track("sheet_item_cost_override", { item, dist, newCost });
+    Analytics.track("sheet_item_cost_override", { item: p.item, product: p.name, dist, newCost });
   }
   function clearSheetItemCost(item) {
     setSheetItems(prev => prev.map(si => si.item === item
@@ -2466,7 +2747,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
       },
     }));
-    Analytics.track("sheet_price_override", { item: p.item, tier, newPrice });
+    Analytics.track("sheet_price_override", { item: p.item, product: p.name, tier, newPrice });
   }
   function clearPriceOverride(key) {
     setPriceOverrides(prev => { const next = { ...prev }; delete next[key]; return next; });
@@ -2961,7 +3242,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
                           {canEdit
-                            ? <EditablePrice value={r.cost} isEdited={r.costIsEdited} onChange={v => setSheetItemCost(r.p.item, v)}
+                            ? <EditablePrice value={r.cost} isEdited={r.costIsEdited} onChange={v => setSheetItemCost(r.p, v)}
                                 title="Click to enter the actual landed cost" />
                             : <div style={{ color: S.text }}>{fmt(r.cost)}</div>}
                           <div style={{ fontSize: 9, color: r.costIsEdited ? S.amber : r.costSource === "Landed" ? S.blue : S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}
@@ -3025,11 +3306,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
             <div style={{ fontSize: 16, fontWeight: 800, color: S.text, marginBottom: 4 }}>Print / Share Sheet</div>
             <div style={{ fontSize: 11, color: S.muted, marginBottom: 16 }}>Choose which columns to include. Cost is off by default.</div>
 
-            <input type="text" placeholder="Sheet title (e.g. grower or field name)" value={printTitle} onChange={e => setPrintTitle(e.target.value)}
+            <input type="text" placeholder={currentSheetName ? `Title (defaults to "${currentSheetName}")` : "Sheet title (e.g. grower or field name)"}
+              value={printTitle} onChange={e => setPrintTitle(e.target.value)}
               style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", marginBottom: 14 }} />
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 18 }}>
-              {[["rate", "Rate/ac"], ["cost", "Cost"], ["price", "Price"], ["costAc", "Cost/ac"], ["priceAc", "Price/ac"], ["profitAc", "Profit/ac"], ["marginPct", "Margin %"], ["notes", "Notes"]].map(([key, label]) => (
+              {[["rate", "Rate/ac"], ["cost", "Cost"], ["price", "Price"], ["priceLabel", "Price label (tier/edited)"], ["costAc", "Cost/ac"], ["priceAc", "Price/ac"], ["profitAc", "Profit/ac"], ["marginPct", "Margin %"], ["notes", "Notes"]].map(([key, label]) => (
                 <label key={key} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer" }}>
                   <input type="checkbox" checked={printCols[key]} onChange={e => setPrintCols(prev => ({ ...prev, [key]: e.target.checked }))}
                     style={{ width: 15, height: 15, accentColor: S.blue }} />
@@ -3038,10 +3320,22 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
               ))}
             </div>
 
-            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer", marginBottom: 18 }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer", marginBottom: 10 }}>
               <input type="checkbox" checked={printColors} onChange={e => setPrintColors(e.target.checked)}
                 style={{ width: 15, height: 15, accentColor: S.blue }} />
               Category colors
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer", marginBottom: 14 }}>
+              <input type="checkbox" checked={printShowSubheader} onChange={e => setPrintShowSubheader(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: S.blue }} />
+              District/tier subheader (e.g. "East TX · Wholesale pricing")
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: S.text, cursor: "pointer", marginBottom: 18, background: bidMode ? "rgba(91,155,213,.1)" : "transparent", border: "1px solid " + (bidMode ? "rgba(91,155,213,.35)" : "transparent"), borderRadius: 8, padding: "8px 10px" }}>
+              <input type="checkbox" checked={bidMode} onChange={e => toggleBidMode(e.target.checked)}
+                style={{ width: 15, height: 15, accentColor: S.blue }} />
+              <span>🤝 <b>Bid Mode</b> — hides the price label and district/tier subheader above, for sharing with a customer</span>
             </label>
 
             <div style={{ display: "flex", gap: 8 }}>
@@ -3051,9 +3345,18 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                 const d = new Date();
                 const stamp = (d.getMonth() + 1) + "." + String(d.getDate()).padStart(2, "0") + "." + String(d.getFullYear()).slice(-2);
                 const originalTitle = document.title;
-                document.title = originalTitle + " " + stamp;
+                // Suggested Save-as-PDF filename comes from document.title at
+                // print time -- match it to the same title shown in the PDF's
+                // own header (sheet name, not the app's tab title) so the
+                // saved file is named e.g. "Bill Crow 2027 8.27.26.pdf".
+                const effectiveTitle = printTitle || currentSheetName || "WE Price Sheet";
+                document.title = effectiveTitle + " " + stamp;
                 const restore = () => { document.title = originalTitle; window.removeEventListener("afterprint", restore); };
                 window.addEventListener("afterprint", restore);
+                Analytics.track("sheet_print", {
+                  title: effectiveTitle, count: sheetItems.length, district: dist, tier, bidMode,
+                  cols: Object.entries(printCols).filter(([k, v]) => v).map(([k]) => k),
+                });
                 setTimeout(() => window.print(), 60);
               }}
                 style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.blue, border: "none", padding: "10px", borderRadius: 8, cursor: "pointer" }}>🖨️ Print / Save PDF</button>
@@ -3244,10 +3547,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
       {printPortalNode && ReactDOM.createPortal(
         <div>
           <div style={{ borderBottom: "3px solid #2d6b3f", paddingBottom: 10, marginBottom: 16 }}>
-            <div style={{ fontSize: 21, fontWeight: 800, color: "#1B5E20" }}>{printTitle || "WE Price Sheet"}</div>
-            <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>
-              {(dist === "wtx" ? "West TX" : "East TX")} · {tier === "wholesale" ? "Wholesale" : tier === "floor" ? "Floor" : "Target"} pricing · {new Date().toLocaleDateString()}
-            </div>
+            <div style={{ fontSize: 21, fontWeight: 800, color: "#1B5E20" }}>{printTitle || currentSheetName || "WE Price Sheet"}</div>
+            {printShowSubheader && (
+              <div style={{ fontSize: 11, color: "#666", marginTop: 3 }}>
+                {(dist === "wtx" ? "West TX" : "East TX")} · {tier === "wholesale" ? "Wholesale" : tier === "floor" ? "Floor" : "Target"} pricing · {new Date().toLocaleDateString()}
+              </div>
+            )}
           </div>
           <table>
             <thead>
@@ -3267,7 +3572,11 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
               {sortedGroupedRows.map(group => (
                 <React.Fragment key={group.cat}>
                   <tr>
-                    <td colSpan={1 + Object.values(printCols).filter(Boolean).length}
+                    {/* priceLabel isn't its own <th>/<td> -- it's a sub-line
+                        inside the Price cell -- so it must NOT be counted
+                        toward the number of real columns here, or this
+                        header bar overspans by one whenever it's checked. */}
+                    <td colSpan={1 + Object.entries(printCols).filter(([k, v]) => v && k !== "priceLabel").length}
                       style={{
                         background: printColors ? colorForCategory(group.cat) : "#eee",
                         color: printColors ? contrastTextFor(colorForCategory(group.cat)) : "#333",
@@ -3284,7 +3593,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                       </td>}
                       {printCols.price && <td className="num">
                         <div style={{ color: "#111", fontWeight: 700 }}>{fmt(r.price)}</div>
-                        <div style={{ fontSize: 9, color: "#888", fontWeight: 400 }}>{r.label}</div>
+                        {printCols.priceLabel && <div style={{ fontSize: 9, color: "#888", fontWeight: 400 }}>{r.label}</div>}
                       </td>}
                       {printCols.costAc && <td className="num" style={{ color: "#333" }}>{r.costAc != null ? fmtAc(r.costAc) : "—"}</td>}
                       {printCols.priceAc && <td className="num" style={{ color: "#333" }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>}
