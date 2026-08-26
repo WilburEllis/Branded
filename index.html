@@ -32,6 +32,7 @@ document.documentElement.dataset.weTheme = localStorage.getItem("we_theme") === 
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1410; color: #d4e0d5; -webkit-font-smoothing: antialiased; }
@@ -1936,6 +1937,23 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
 }
 
 // ═══ PROFITABILITY SHEET ═══
+// Column config for the My Sheet table header row -- `key` is the sort key
+// (matches the field name on each `rows` entry, or "name" for r.p.name);
+// `key: null` marks non-sortable columns (drag handle, Notes, delete).
+const SHEET_HEADERS = [
+  { label: "", key: null },
+  { label: "Product", key: "name" },
+  { label: "Rate/ac", key: "rate" },
+  { label: "Cost", key: "cost" },
+  { label: "Price", key: "price" },
+  { label: "Cost/ac", key: "costAc" },
+  { label: "Price/ac", key: "priceAc" },
+  { label: "Profit/ac", key: "profitAc" },
+  { label: "Margin", key: "marginPct" },
+  { label: "Notes", key: null },
+  { label: "", key: null },
+];
+
 function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
   const [dist, setDist] = useState(defaultDistrict === "wtx" ? "wtx" : "etx");
   const [tier, setTier] = useState("floor"); // wholesale | floor | target
@@ -1944,6 +1962,16 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   const [sheetItems, setSheetItems] = useState([]); // [{item, rate}]
   const [dragItem, setDragItem] = useState(null);
   const [dragOverItem, setDragOverItem] = useState(null);
+  // Column sort for the My Sheet table. Sorts within each category group,
+  // so it layers on top of (rather than replaces) the existing drag-to-
+  // reorder-within-category feature -- drag is disabled while a sort is
+  // active since the two ways of ordering rows would otherwise conflict.
+  const [sortCol, setSortCol] = useState(null); // null | 'name' | 'rate' | 'cost' | 'price' | 'costAc' | 'priceAc' | 'profitAc' | 'marginPct'
+  const [sortDir, setSortDir] = useState("desc"); // 'asc' | 'desc'
+  function onSortClick(key) {
+    if (sortCol === key) { setSortDir(d => d === "desc" ? "asc" : "desc"); }
+    else { setSortCol(key); setSortDir(key === "name" ? "asc" : "desc"); }
+  }
   const [showPrintPanel, setShowPrintPanel] = useState(false);
   const [printTitle, setPrintTitle] = useState("");
   const [printCols, setPrintCols] = useState({ rate: true, cost: false, price: true, costAc: false, priceAc: true, profitAc: false, marginPct: false, notes: false });
@@ -1965,6 +1993,13 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   const [priceOverrides, setPriceOverrides] = useState({}); // key: "item|tier|dist" -> {item, productName, pkg, tier, dist, isNat, newPrice, originalPrice}
   const [showSavePrices, setShowSavePrices] = useState(false);
   const [generatedSql, setGeneratedSql] = useState("");
+
+  // ── Cost dial-in (same local-edit-then-SQL pattern as price, but for
+  //    landed_costs -- Nathan wants to punch in the real, actual landed
+  //    cost he's paying at a location right on the sheet, then push it to
+  //    the master landed_costs table once he's confirmed it's right. ──
+  const [showSaveCosts, setShowSaveCosts] = useState(false);
+  const [generatedCostSql, setGeneratedCostSql] = useState("");
 
   // Landed cost wins whenever it exists for this item+district, regardless
   // of price tier (including Wholesale) -- manufactured cost is only a
@@ -2079,6 +2114,27 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     const ordered = catOrder.filter(c => present.includes(c));
     const rest = present.filter(c => !catOrder.includes(c)).sort();
     return [...ordered, ...rest].map(cat => ({ cat, items: byCat.get(cat) }));
+  }
+
+  // Sorts each category group's items in place by the active sort column --
+  // 'name' compares product names A-Z/Z-A, everything else compares numeric
+  // values high-low/low-high. Nulls (no data for that field) always sort to
+  // the bottom regardless of direction. Leaves group order/composition
+  // untouched, so this composes cleanly with the existing category grouping.
+  function sortGroupItems(groups, col, dir) {
+    if (!col) return groups;
+    return groups.map(g => {
+      const items = [...g.items].sort((a, b) => {
+        const av = col === "name" ? a.p.name : a[col];
+        const bv = col === "name" ? b.p.name : b[col];
+        if (av == null && bv == null) return 0;
+        if (av == null) return 1;
+        if (bv == null) return -1;
+        const cmp = typeof av === "string" ? av.localeCompare(bv) : av - bv;
+        return dir === "asc" ? cmp : -cmp;
+      });
+      return { cat: g.cat, items };
+    });
   }
 
   useEffect(() => {
@@ -2212,6 +2268,48 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   function updateNote(item, note) {
     setSheetItems(prev => prev.map(si => si.item === item ? { ...si, note } : si));
   }
+  // Per-sheet-item price override -- lives on the sheet ITEM itself (part of
+  // sheetItems, which already round-trips through saved_sheets.items), not
+  // in the shared cross-sheet priceOverrides map below. That map is keyed
+  // only by item+tier+district, with no notion of "which sheet" -- so a
+  // Bill Crow negotiated price and East TX Wholesale's list price for the
+  // same item collided, since both are wholesale tier and wholesale is
+  // district-independent. Storing the override on sheetItems fixes that:
+  // loadSheet() already swaps sheetItems wholesale, so each saved sheet
+  // carries only its own price edits and nothing bleeds across sheets.
+  // priceTier/priceDist are stamped at edit time so an override made under
+  // Wholesale doesn't get misread as a Floor override if the tier is later
+  // flipped while viewing the same sheet.
+  function setSheetItemPrice(p, newPrice) {
+    setSheetItems(prev => prev.map(si => si.item === p.item
+      ? { ...si, price: newPrice, priceTier: tier, priceDist: tier === "wholesale" ? "any" : dist }
+      : si));
+    Analytics.track("sheet_item_price_override", { item: p.item, tier, dist, newPrice });
+  }
+  function clearSheetItemPrice(item) {
+    setSheetItems(prev => prev.map(si => si.item === item
+      ? { ...si, price: undefined, priceTier: undefined, priceDist: undefined }
+      : si));
+    Analytics.track("sheet_item_price_reset", { item });
+  }
+  // Per-sheet-item COST override -- same pattern as price, but keyed only by
+  // district (not tier -- cost isn't a Wholesale/Floor/Target concept).
+  // Lets Nathan punch in the real landed cost he's actually paying at a
+  // location right on the sheet, overriding whatever landed_costs/skus.cost
+  // currently shows, so his Profit/ac and Margin% are accurate even before
+  // (or instead of) a full landed-cost re-import.
+  function setSheetItemCost(item, newCost) {
+    setSheetItems(prev => prev.map(si => si.item === item
+      ? { ...si, cost: newCost, costDist: dist }
+      : si));
+    Analytics.track("sheet_item_cost_override", { item, dist, newCost });
+  }
+  function clearSheetItemCost(item) {
+    setSheetItems(prev => prev.map(si => si.item === item
+      ? { ...si, cost: undefined, costDist: undefined }
+      : si));
+    Analytics.track("sheet_item_cost_reset", { item });
+  }
   function clearSheet() {
     setSheetItems([]);
     setCurrentSheetId(null);
@@ -2238,13 +2336,19 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   // not off target's nullness. (The admin grid mislabels floor as non-Nat
   // when only floor is missing but target has real district data -- worth
   // fixing there too if you want, didn't touch it since it wasn't asked.)
-  function rawPriceFor(p) {
-    if (tier === "wholesale") return { price: wholesaleBasis(p), label: "Wholesale", isNat: false };
-    const isWest = dist === "wtx";
+  // tierArg/distArg let a caller price a product for a tier/district OTHER
+  // than whatever's currently selected in the UI -- needed to price a sheet
+  // item's stored override (si.priceTier/si.priceDist) correctly even when
+  // you've since flipped the sheet to a different tier/district view.
+  function rawPriceFor(p, tierArg, distArg) {
+    const t = tierArg || tier;
+    const d = distArg || dist;
+    if (t === "wholesale") return { price: wholesaleBasis(p), label: "Wholesale", isNat: false };
+    const isWest = d === "wtx";
     const rawTarget = isWest ? p.w_target : p.e_target;
     const rawFloor = isWest ? p.w_floor : p.e_floor;
     const base = isWest ? "West TX" : "East TX";
-    if (tier === "floor") {
+    if (t === "floor") {
       const isNat = rawFloor == null && p.nat_target != null;
       const val = rawFloor != null ? rawFloor : natFloorOf(p);
       return { price: val, label: base + " Floor" + (isNat ? " (Nat)" : ""), isNat };
@@ -2270,6 +2374,85 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     }
     return { ...rawPriceFor(p), isEdited: false };
   }
+  // My Sheet's own price resolver -- checks the sheet ITEM's own price
+  // override (set via setSheetItemPrice, saved/loaded per-sheet) before
+  // falling back to the raw tier/district list price. Deliberately does NOT
+  // consult the shared priceOverrides map, so Value Ladder what-if edits and
+  // other saved sheets' bid prices never leak into this sheet, and this
+  // sheet's bid prices never leak into them.
+  function sheetItemPriceFor(si, p) {
+    const curDist = tier === "wholesale" ? "any" : dist;
+    if (si.price != null && si.priceTier === tier && si.priceDist === curDist) {
+      const raw = rawPriceFor(p);
+      return { price: si.price, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
+    }
+    return { ...rawPriceFor(p), isEdited: false };
+  }
+
+  // Unified list for the "Save Prices" -> master-list SQL export: combines
+  // Value Ladder what-ifs (priceOverrides, category-wide scratchpad) with
+  // the CURRENTLY LOADED sheet's own per-item price edits (sheetItems).
+  // Sheet edits are scoped to whichever sheet is open right now -- switching
+  // sheets swaps sheetItems entirely, so this naturally only ever offers up
+  // the open sheet's own dial-in prices, never another saved sheet's.
+  const allPriceEdits = useMemo(() => {
+    const ladder = Object.entries(priceOverrides).map(([key, ov]) => ({ ...ov, key, source: "ladder" }));
+    const sheet = sheetItems.filter(si => si.price != null && si.priceTier != null).map(si => {
+      const p = txData.find(x => x.item === si.item);
+      if (!p) return null;
+      const raw = rawPriceFor(p, si.priceTier, si.priceDist);
+      return {
+        key: "sheet|" + si.item + "|" + si.priceTier + "|" + si.priceDist,
+        item: si.item, productName: p.name, pkg: p.pkg,
+        tier: si.priceTier, dist: si.priceDist, isNat: raw.isNat,
+        newPrice: si.price, originalPrice: raw.price,
+        dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+        source: "sheet",
+      };
+    }).filter(Boolean);
+    return [...ladder, ...sheet];
+  }, [priceOverrides, sheetItems, txData]);
+
+  // Same scoping rule as allPriceEdits: only the CURRENTLY LOADED sheet's own
+  // cost edits, since sheetItems swaps out entirely on loadSheet.
+  const sheetCostEdits = useMemo(() => {
+    return sheetItems.filter(si => si.cost != null && si.costDist != null).map(si => {
+      const p = txData.find(x => x.item === si.item);
+      if (!p) return null;
+      const landed = landedCosts[si.item]?.[si.costDist];
+      return {
+        item: si.item, productName: p.name, pkg: p.pkg,
+        dist: si.costDist, newCost: si.cost,
+        originalCost: landed ? landed.avg_cost : p.cost,
+        hadLanded: !!landed,
+      };
+    }).filter(Boolean);
+  }, [sheetItems, txData, landedCosts]);
+
+  function clearAllSheetCostEdits() {
+    setSheetItems(prev => prev.map(si => ({ ...si, cost: undefined, costDist: undefined })));
+    setGeneratedCostSql("");
+  }
+
+  function generateCostSql() {
+    const today = new Date().toISOString().slice(0, 10);
+    const lines = sheetCostEdits.map(ov => {
+      const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
+      // A manual single-value correction, so low/high collapse to the same
+      // number and n_lots/total_qty are unknown -- same shape a real 1-lot
+      // landed_costs snapshot would have. sku_item+district_id is the PK
+      // (confirmed via the CSV import schema), so ON CONFLICT upserts
+      // cleanly whether or not a row already exists for this item+district.
+      const upsert = `INSERT INTO public.landed_costs (sku_item, district_id, avg_cost, low_cost, high_cost, n_lots, total_qty, as_of_date) VALUES (${ov.item}, '${ov.dist}', ${ov.newCost}, ${ov.newCost}, ${ov.newCost}, 1, 0, '${today}') ON CONFLICT (sku_item, district_id) DO UPDATE SET avg_cost = EXCLUDED.avg_cost, low_cost = EXCLUDED.low_cost, high_cost = EXCLUDED.high_cost, as_of_date = EXCLUDED.as_of_date; -- ${tag}`;
+      // Also append to landed_cost_history so this correction shows up in
+      // the trend record, same as a real re-import would (per Nathan's
+      // stated preference to keep history even though the snapshot table
+      // gets replaced).
+      const history = `INSERT INTO public.landed_cost_history (sku_item, district_id, avg_cost, low_cost, high_cost, n_lots, total_qty, as_of_date) VALUES (${ov.item}, '${ov.dist}', ${ov.newCost}, ${ov.newCost}, ${ov.newCost}, 1, 0, '${today}'); -- ${tag}, manual correction`;
+      return upsert + "\n" + history;
+    });
+    setGeneratedCostSql(lines.join("\n"));
+  }
 
   function setPriceOverride(p, newPrice) {
     const key = priceOverrideKey(p.item);
@@ -2290,11 +2473,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   }
   function clearAllPriceOverrides() {
     setPriceOverrides({});
+    setSheetItems(prev => prev.map(si => ({ ...si, price: undefined, priceTier: undefined, priceDist: undefined })));
     setGeneratedSql("");
   }
 
   function generatePriceSql() {
-    const lines = Object.values(priceOverrides).map(ov => {
+    const lines = allPriceEdits.map(ov => {
       const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
       if (ov.tier === "wholesale") {
         // Sheet edits happen in the same per-package basis as Cost/Target/
@@ -2316,8 +2500,14 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   const rows = useMemo(() => sheetItems.map(si => {
     const p = txData.find(x => x.item === si.item);
     if (!p) return null;
-    const { price, label, isEdited } = priceFor(p);
-    const { cost, source: costSource, low: costLow, high: costHigh, nLots: costNLots } = costFor(p);
+    const { price, label, isEdited } = sheetItemPriceFor(si, p);
+    const costIsEdited = si.cost != null && si.costDist === dist;
+    const rawCost = costFor(p);
+    const cost = costIsEdited ? si.cost : rawCost.cost;
+    const costSource = costIsEdited ? "Edited" : rawCost.source;
+    const costLow = costIsEdited ? null : rawCost.low;
+    const costHigh = costIsEdited ? null : rawCost.high;
+    const costNLots = costIsEdited ? null : rawCost.nLots;
     const rate = si.rate;
     const isNTP = p.n_treatment === true || p.n_treatment === "true";
     let costAc, priceAc;
@@ -2338,11 +2528,42 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     }
     const profitAc = (costAc != null && priceAc != null) ? priceAc - costAc : null;
     const marginPct = (price != null && cost != null && price > 0) ? ((price - cost) / price) * 100 : null;
-    return { p, price, label, isEdited, rate, note: si.note || "", cost, costSource, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct, isNTP };
-  }).filter(Boolean), [sheetItems, tier, dist, txData, overridesMap, priceOverrides, landedCosts, nTreatBasis, uanGalRate, ureaLbsRate]);
+    return { p, price, label, isEdited, rate, note: si.note || "", cost, costSource, costIsEdited, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct, isNTP };
+  }).filter(Boolean), [sheetItems, tier, dist, txData, overridesMap, landedCosts, nTreatBasis, uanGalRate, ureaLbsRate]);
 
   const totalProfitAc = rows.reduce((s, r) => s + (r.profitAc || 0), 0);
   const groupedRows = useMemo(() => groupRowsByCategory(rows), [rows, catOrder]);
+  const sortedGroupedRows = useMemo(() => sortGroupItems(groupedRows, sortCol, sortDir), [groupedRows, sortCol, sortDir]);
+
+  function exportToExcel() {
+    const data = [];
+    sortedGroupedRows.forEach(g => {
+      g.items.forEach(r => {
+        data.push({
+          Category: g.cat,
+          Product: r.p.name,
+          Package: r.p.pkg || "",
+          "Item #": r.p.item,
+          "Rate/ac": r.rate != null && r.p.rate_unit ? r.rate + " " + r.p.rate_unit : "",
+          Cost: r.cost != null ? Math.round(r.cost * 100) / 100 : "",
+          Price: r.price != null ? Math.round(r.price * 100) / 100 : "",
+          "Cost/ac": r.costAc != null ? Math.round(r.costAc * 100) / 100 : "",
+          "Price/ac": r.priceAc != null ? Math.round(r.priceAc * 100) / 100 : "",
+          "Profit/ac": r.profitAc != null ? Math.round(r.profitAc * 100) / 100 : "",
+          "Margin %": r.marginPct != null ? Math.round(r.marginPct * 10) / 10 : "",
+          Notes: r.note || "",
+        });
+      });
+    });
+    const ws = XLSX.utils.json_to_sheet(data);
+    ws["!cols"] = [{ wch: 14 }, { wch: 28 }, { wch: 12 }, { wch: 9 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 10 }, { wch: 24 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Price Sheet");
+    const stamp = new Date().toISOString().slice(0, 10);
+    const safeName = (currentSheetName || "WE_Price_Sheet").replace(/[^\w\- ]+/g, "").trim() || "WE_Price_Sheet";
+    XLSX.writeFile(wb, `${safeName}_${stamp}.xlsx`);
+    Analytics.track("sheet_export_excel", { count: data.length, district: dist, tier });
+  }
 
   // Value Ladder: every product in the selected category, at its own default
   // rate, sorted cheapest to priciest -- shows where each product sits in
@@ -2414,13 +2635,19 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     );
   }
 
-  function EditablePrice({ value, isEdited, onChange }) {
+  function EditablePrice({ value, isEdited, onChange, title = "Click to try a different price" }) {
     const [editing, setEditing] = useState(false);
     const [val, setVal] = useState(value != null ? String(value) : "");
     const onDone = () => {
       const n = parseFloat(val);
-      if (!isNaN(n) && n >= 0) onChange(n);
-      else setVal(value != null ? String(value) : "");
+      if (!isNaN(n) && n >= 0) {
+        // val starts as the exact, un-rounded value on entering edit mode, so
+        // clicking in then clicking out untouched reparses to the identical
+        // number -- only commit (and thus flip the cell amber) on a REAL change.
+        if (value == null || Math.abs(n - value) > 1e-9) onChange(n);
+      } else {
+        setVal(value != null ? String(value) : "");
+      }
       setEditing(false);
     };
     if (editing) {
@@ -2430,7 +2657,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     }
     return (
       <span onClick={() => { setVal(value != null ? String(value) : ""); setEditing(true); }}
-        title="Click to try a different price"
+        title={title}
         style={{ cursor: "pointer", borderBottom: "1px dashed " + (isEdited ? S.amber : S.muted), fontWeight: 700, color: isEdited ? S.amber : S.text }}>
         {fmt(value)}
       </span>
@@ -2448,8 +2675,14 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     const onDone = () => {
       const m = parseFloat(val);
       if (!isNaN(m) && m < 100 && canEditMargin) {
-        const newPrice = Math.round((cost / (1 - m / 100)) * 100) / 100;
-        onPriceChange(newPrice);
+        // val starts as value.toFixed(1) on entering edit mode -- that
+        // display rounding alone can shift it up to 0.05 from the real
+        // underlying margin, so use a tolerance wider than that (not exact
+        // equality) to tell "untouched" apart from a genuine edit.
+        if (value == null || Math.abs(m - value) > 0.05) {
+          const newPrice = Math.round((cost / (1 - m / 100)) * 100) / 100;
+          onPriceChange(newPrice);
+        }
       } else {
         setVal(value != null ? value.toFixed(1) : "");
       }
@@ -2486,10 +2719,24 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           {currentSheetName && <div style={{ fontSize: 10, color: S.muted }}>Editing: <span style={{ color: S.text, fontWeight: 600 }}>{currentSheetName}</span></div>}
           <div style={{ display: "flex", gap: 6 }}>
-            {canEdit && Object.keys(priceOverrides).length > 0 && (
+            {/* Pulls from BOTH Value Ladder what-ifs (priceOverrides) AND the
+                CURRENTLY LOADED sheet's own dial-in prices (sheetItems) --
+                see allPriceEdits. Scoped to the open sheet only: switching
+                sheets swaps sheetItems, so a different sheet's own bid
+                prices never show up here uninvited. This is the intended
+                workflow for pushing a sheet's dialed-in prices into the
+                master Floor/Target/Wholesale list -- use deliberately, since
+                the generated SQL updates skus/district_prices for everyone. */}
+            {canEdit && allPriceEdits.length > 0 && (
               <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
                 style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.amber, border: "1px solid " + S.amber, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
-                💰 Save Prices ({Object.keys(priceOverrides).length})
+                💰 Save Prices ({allPriceEdits.length})
+              </button>
+            )}
+            {canEdit && sheetCostEdits.length > 0 && (
+              <button onClick={() => { setGeneratedCostSql(""); setShowSaveCosts(true); }}
+                style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.blue, border: "1px solid " + S.blue, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+                🧾 Save Costs ({sheetCostEdits.length})
               </button>
             )}
             {canEdit && <button onClick={() => setShowManageCats(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>🏷️ Categories</button>}
@@ -2552,12 +2799,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
           {ladderRows.length === 0 ? (
             <div style={{ fontSize: 12, color: S.muted, padding: "16px 0" }}>No products found in this category.</div>
           ) : (
-            <div style={{ overflowX: "auto" }}>
+            <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "65vh" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
                 <thead>
                   <tr>
                     {["Product", "Rate/ac", "Cost", "Price", "Price/ac", "Profit/ac", "Margin", ""].map((h, i) => (
-                      <th key={i} style={{ textAlign: i >= 1 && i <= 6 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px", borderBottom: "1px solid " + S.border, whiteSpace: "nowrap" }}>{h}</th>
+                      <th key={i} style={{ textAlign: i >= 1 && i <= 6 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px", borderBottom: "1px solid " + S.border, whiteSpace: "nowrap", position: "sticky", top: 0, background: S.headerBg, zIndex: 2 }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
@@ -2609,7 +2856,15 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
       )}
 
       <div style={{ background: "rgba(76,175,106,.06)", border: "1px solid rgba(76,175,106,.28)", borderRadius: 12, padding: 14 }}>
-        <div style={{ fontSize: 13, fontWeight: 800, color: S.green, marginBottom: rows.length === 0 ? 0 : 10 }}>📋 My Sheet{currentSheetName ? " — " + currentSheetName : ""}</div>
+        <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: rows.length === 0 ? 0 : 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, color: S.green }}>📋 My Sheet{currentSheetName ? " — " + currentSheetName : ""}</div>
+          {sortCol && (
+            <button onClick={() => setSortCol(null)} title="Restore manual drag order"
+              style={{ fontSize: 9, fontWeight: 700, color: S.muted, background: S.tag, border: "1px solid " + S.border, borderRadius: 10, padding: "3px 9px", cursor: "pointer" }}>
+              ✕ Clear sort (drag reorder disabled while sorted)
+            </button>
+          )}
+        </div>
       {rows.length === 0 ? (
         <div style={{ textAlign: "center", padding: "48px 20px 24px", color: S.muted }}>
           <div style={{ fontSize: 36, marginBottom: 12 }}>🧮</div>
@@ -2618,17 +2873,28 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         </div>
       ) : (
         <React.Fragment>
-          <div style={{ overflowX: "auto" }}>
+          <div style={{ overflowX: "auto", overflowY: "auto", maxHeight: "65vh" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
               <thead>
                 <tr>
-                  {["", "Product", "Rate/ac", "Cost", "Price", "Cost/ac", "Price/ac", "Profit/ac", "Margin", "Notes", ""].map((h, i) => (
-                    <th key={i} style={{ textAlign: i >= 2 && i <= 8 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px", borderBottom: "1px solid " + S.border, whiteSpace: "nowrap" }}>{h}</th>
+                  {SHEET_HEADERS.map((col, i) => (
+                    <th key={i} onClick={col.key ? () => onSortClick(col.key) : undefined}
+                      title={col.key ? "Click to sort" : undefined}
+                      style={{
+                        textAlign: i >= 2 && i <= 8 ? "right" : "left", fontWeight: 700,
+                        color: sortCol === col.key && col.key ? S.blue : S.muted, fontSize: 9,
+                        textTransform: "uppercase", letterSpacing: .5, padding: "6px 8px",
+                        borderBottom: "1px solid " + S.border, whiteSpace: "nowrap",
+                        position: "sticky", top: 0, background: S.headerBg, zIndex: 2,
+                        cursor: col.key ? "pointer" : "default", userSelect: "none",
+                      }}>
+                      {col.label}{col.key && sortCol === col.key ? (sortDir === "asc" ? " ▲" : " ▼") : ""}
+                    </th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {groupedRows.map(group => (
+                {sortedGroupedRows.map(group => (
                   <React.Fragment key={group.cat}>
                     <SheetGroupHeader cat={group.cat} count={group.items.length} colSpan={11}
                       color={colorForCategory(group.cat)} textColor={contrastTextFor(colorForCategory(group.cat))}
@@ -2675,8 +2941,9 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                         onDrop={e => { e.preventDefault(); reorderSheet(dragItem, r.p.item); setDragItem(null); setDragOverItem(null); }}
                         style={{ background: dragOverItem === r.p.item && dragItem !== r.p.item ? "rgba(91,155,213,.1)" : catRowBg(r.p.cat), borderTop: dragOverItem === r.p.item && dragItem !== r.p.item ? "2px solid " + S.blue : "2px solid transparent" }}>
                         <td style={{ padding: "8px 2px", borderBottom: "1px solid " + S.border + "60", width: 22 }}>
-                          <span draggable onDragStart={e => { setDragItem(r.p.item); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragItem(null); setDragOverItem(null); }}
-                            style={{ cursor: "grab", color: S.muted, fontSize: 14, userSelect: "none", touchAction: "none" }} title="Drag to reorder">⠿</span>
+                          <span draggable={!sortCol} onDragStart={e => { if (sortCol) return; setDragItem(r.p.item); e.dataTransfer.effectAllowed = "move"; }} onDragEnd={() => { setDragItem(null); setDragOverItem(null); }}
+                            style={{ cursor: sortCol ? "not-allowed" : "grab", color: S.muted, fontSize: 14, userSelect: "none", touchAction: "none", opacity: sortCol ? .35 : 1 }}
+                            title={sortCol ? "Clear sort to drag reorder" : "Drag to reorder"}>⠿</span>
                         </td>
                         <td style={{ padding: "8px", borderBottom: "1px solid " + S.border + "60" }}>
                           {labelUrls[r.p.name] ? (
@@ -2693,12 +2960,28 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                           {r.p.rate_unit ? <EditableRate value={r.rate} unit={r.p.rate_unit} onChange={v => updateRate(r.p.item, v)} /> : <span style={{ color: S.muted }}>—</span>}
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                          <div style={{ color: S.text }}>{fmt(r.cost)}</div>
-                          <div style={{ fontSize: 9, color: r.costSource === "Landed" ? S.blue : S.muted }} title={r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>{r.costSource}</div>
+                          {canEdit
+                            ? <EditablePrice value={r.cost} isEdited={r.costIsEdited} onChange={v => setSheetItemCost(r.p.item, v)}
+                                title="Click to enter the actual landed cost" />
+                            : <div style={{ color: S.text }}>{fmt(r.cost)}</div>}
+                          <div style={{ fontSize: 9, color: r.costIsEdited ? S.amber : r.costSource === "Landed" ? S.blue : S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}
+                            title={r.costIsEdited ? "Manually entered — not yet saved to landed_costs" : r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>
+                            {r.costSource}
+                            {r.costIsEdited && (
+                              <span onClick={() => clearSheetItemCost(r.p.item)} title="Reset to Landed/Mfg cost"
+                                style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                          <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setPriceOverride(r.p, v)} />
-                          <div style={{ fontSize: 9, color: S.muted }}>{r.label}</div>
+                          <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setSheetItemPrice(r.p, v)} />
+                          <div style={{ fontSize: 9, color: S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+                            {r.label}
+                            {r.isEdited && (
+                              <span onClick={() => clearSheetItemPrice(r.p.item)} title="Reset to list price"
+                                style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                            )}
+                          </div>
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.costAc != null ? fmtAc(r.costAc) : "—"}</td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>
@@ -2706,7 +2989,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                           {r.profitAc != null ? fmtAc(r.profitAc) : "—"}
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                          <EditableMargin value={r.marginPct} cost={r.cost} isEdited={r.isEdited} onPriceChange={v => setPriceOverride(r.p, v)} />
+                          <EditableMargin value={r.marginPct} cost={r.cost} isEdited={r.isEdited} onPriceChange={v => setSheetItemPrice(r.p, v)} />
                         </td>
                         <td style={{ padding: "8px", borderBottom: "1px solid " + S.border + "60", minWidth: 140 }}>
                           <EditableNote value={r.note} onChange={v => updateNote(r.p.item, v)} />
@@ -2724,6 +3007,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 14, paddingTop: 12, borderTop: "2px solid " + S.border }}>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={clearSheet} style={{ fontSize: 11, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>Clear Sheet</button>
+              <button onClick={exportToExcel} style={{ fontSize: 11, fontWeight: 700, color: S.green, background: "rgba(76,175,106,.1)", border: "1px solid rgba(76,175,106,.3)", padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>📊 Export Excel</button>
               <button onClick={() => setShowPrintPanel(true)} style={{ fontSize: 11, fontWeight: 700, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>🖨️ Print / Share</button>
             </div>
             <div style={{ textAlign: "right" }}>
@@ -2849,26 +3133,27 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
           <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 640, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
             <div style={{ padding: "18px 20px 4px", fontSize: 16, fontWeight: 800, color: S.text }}>Save Price Changes</div>
             <div style={{ padding: "0 20px 10px", fontSize: 11, color: S.muted }}>
-              These are local what-ifs only — nothing's been written to Supabase yet. Review them, then generate the SQL below and run it yourself when you're ready.
+              These are local what-ifs only — nothing's been written to Supabase yet. Includes edits from Value Ladder and from{currentSheetName ? " your open sheet (" + currentSheetName + ")" : " your current sheet"}. Review them, then generate the SQL below and run it yourself when you're ready.
             </div>
             <div style={{ overflowY: "auto", padding: "0 20px" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
-                    {["Product", "Tier", "Was", "Now", ""].map((h, i) => (
-                      <th key={i} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>{h}</th>
+                    {["Product", "Tier", "From", "Was", "Now", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 3 && i <= 4 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(priceOverrides).map(([key, ov]) => (
-                    <tr key={key}>
+                  {allPriceEdits.map(ov => (
+                    <tr key={ov.key}>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.text }}>{ov.productName}{ov.pkg ? " (" + ov.pkg + ")" : ""}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted, textTransform: "capitalize" }}>{ov.tier}{ov.tier !== "wholesale" ? " · " + (ov.dist === "wtx" ? "West" : "East") : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted }}>{ov.source === "sheet" ? "My Sheet" : "Value Ladder"}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.muted, textAlign: "right" }}>{fmt(ov.originalPrice)}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.amber, fontWeight: 700, textAlign: "right" }}>{fmt(ov.newPrice)}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", textAlign: "right" }}>
-                        <button onClick={() => clearPriceOverride(key)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
+                        <button onClick={() => ov.source === "sheet" ? clearSheetItemPrice(ov.item) : clearPriceOverride(ov.key)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
                       </td>
                     </tr>
                   ))}
@@ -2878,7 +3163,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
               {generatedSql && (
                 <div style={{ marginTop: 14 }}>
                   <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>SQL — review before running</div>
-                  <textarea readOnly value={generatedSql} rows={Math.min(10, Object.keys(priceOverrides).length + 1)}
+                  <textarea readOnly value={generatedSql} rows={Math.min(10, allPriceEdits.length + 1)}
                     style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.green, fontFamily: "monospace", fontSize: 11, padding: 10, boxSizing: "border-box", resize: "vertical" }} />
                   <button onClick={() => { navigator.clipboard?.writeText(generatedSql); }}
                     style={{ marginTop: 6, fontSize: 11, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>📋 Copy SQL</button>
@@ -2889,6 +3174,56 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
               <button onClick={() => setShowSavePrices(false)} style={{ fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Close</button>
               <button onClick={clearAllPriceOverrides} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
               <button onClick={generatePriceSql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.amber, border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Generate SQL</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveCosts && (
+        <div onClick={() => setShowSaveCosts(false)} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+          <div onClick={e => e.stopPropagation()} style={{ background: S.card, borderRadius: 16, maxWidth: 640, width: "100%", maxHeight: "85vh", display: "flex", flexDirection: "column" }}>
+            <div style={{ padding: "18px 20px 4px", fontSize: 16, fontWeight: 800, color: S.text }}>Save Cost Corrections</div>
+            <div style={{ padding: "0 20px 10px", fontSize: 11, color: S.muted }}>
+              Landed cost entries you've punched in on{currentSheetName ? " your open sheet (" + currentSheetName + ")" : " your current sheet"} — nothing's been written to Supabase yet. This writes to <b>landed_costs</b> (and logs to <b>landed_cost_history</b> so the trend record isn't lost). Review, then generate the SQL and run it yourself.
+            </div>
+            <div style={{ overflowY: "auto", padding: "0 20px" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["Product", "District", "Was", "Now", ""].map((h, i) => (
+                      <th key={i} style={{ textAlign: i >= 2 && i <= 3 ? "right" : "left", fontWeight: 700, color: S.muted, fontSize: 9, textTransform: "uppercase", letterSpacing: .5, padding: "6px 4px", borderBottom: "1px solid " + S.border }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {sheetCostEdits.map(ov => (
+                    <tr key={ov.item + "|" + ov.dist}>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.text }}>{ov.productName}{ov.pkg ? " (" + ov.pkg + ")" : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted }}>{ov.dist === "wtx" ? "West" : "East"}{!ov.hadLanded ? " · no landed row yet" : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.muted, textAlign: "right" }}>{fmt(ov.originalCost)}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.blue, fontWeight: 700, textAlign: "right" }}>{fmt(ov.newCost)}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", textAlign: "right" }}>
+                        <button onClick={() => clearSheetItemCost(ov.item)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              {generatedCostSql && (
+                <div style={{ marginTop: 14 }}>
+                  <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>SQL — review before running</div>
+                  <textarea readOnly value={generatedCostSql} rows={Math.min(14, sheetCostEdits.length * 2 + 1)}
+                    style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.green, fontFamily: "monospace", fontSize: 11, padding: 10, boxSizing: "border-box", resize: "vertical" }} />
+                  <button onClick={() => { navigator.clipboard?.writeText(generatedCostSql); }}
+                    style={{ marginTop: 6, fontSize: 11, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>📋 Copy SQL</button>
+                </div>
+              )}
+            </div>
+            <div style={{ padding: "14px 20px 20px", display: "flex", gap: 8 }}>
+              <button onClick={() => setShowSaveCosts(false)} style={{ fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Close</button>
+              <button onClick={clearAllSheetCostEdits} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
+              <button onClick={generateCostSql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.blue, border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Generate SQL</button>
             </div>
           </div>
         </div>
@@ -2929,7 +3264,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
               </tr>
             </thead>
             <tbody>
-              {groupedRows.map(group => (
+              {sortedGroupedRows.map(group => (
                 <React.Fragment key={group.cat}>
                   <tr>
                     <td colSpan={1 + Object.values(printCols).filter(Boolean).length}
