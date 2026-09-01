@@ -324,13 +324,19 @@ function LoginScreen({ onLogin, error, loading }) {
   async function sendMagicLink() {
     if (!magicEmail.trim()) return;
     setMagicSending(true);
-    await supabaseClient.auth.signInWithOtp({
+    const { error } = await supabaseClient.auth.signInWithOtp({
       email: magicEmail.trim(),
       options: {
         shouldCreateUser: false,
         emailRedirectTo: window.location.origin + window.location.pathname,
       },
     });
+    // Logged, not shown -- the UI stays a generic "check your email" either
+    // way (see comment above) so a bad/unrecognized email can't be
+    // distinguished from a good one, but the real reason is still visible
+    // in the console for debugging (rate limits, redirect URL mismatch,
+    // OTP provider not enabled, etc. all surface here).
+    if (error) console.error("Magic link error:", error);
     setMagicSending(false);
     setMagicSent(true);
   }
