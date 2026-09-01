@@ -309,37 +309,6 @@ function LoginScreen({ onLogin, error, loading }) {
   const [un, setUn] = useState("");
   const [pw, setPw] = useState("");
   const [showRequest, setShowRequest] = useState(false);
-  const [mode, setMode] = useState("password"); // "password" | "magic"
-  const [magicEmail, setMagicEmail] = useState("");
-  const [magicSending, setMagicSending] = useState(false);
-  const [magicSent, setMagicSent] = useState(false);
-
-  // shouldCreateUser:false means an email with no existing account errors
-  // out server-side instead of silently creating one -- see access-request
-  // flow above for how someone actually gets an account. The UI shows the
-  // same "check your email" message either way (never a distinct "no
-  // account found" error) so a random email can't be used to probe whether
-  // a given address has access -- same reasoning as any password-reset
-  // flow that doesn't confirm/deny account existence.
-  async function sendMagicLink() {
-    if (!magicEmail.trim()) return;
-    setMagicSending(true);
-    const { error } = await supabaseClient.auth.signInWithOtp({
-      email: magicEmail.trim(),
-      options: {
-        shouldCreateUser: false,
-        emailRedirectTo: window.location.origin + window.location.pathname,
-      },
-    });
-    // Logged, not shown -- the UI stays a generic "check your email" either
-    // way (see comment above) so a bad/unrecognized email can't be
-    // distinguished from a good one, but the real reason is still visible
-    // in the console for debugging (rate limits, redirect URL mismatch,
-    // OTP provider not enabled, etc. all surface here).
-    if (error) console.error("Magic link error:", error);
-    setMagicSending(false);
-    setMagicSent(true);
-  }
 
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(145deg,#0a120b,#0f1f12 50%,#0a120b)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
@@ -348,45 +317,16 @@ function LoginScreen({ onLogin, error, loading }) {
         <h1 style={{ fontSize: 22, fontWeight: 800, color: S.green, letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>WE Price Lookup</h1>
         <p style={{ fontSize: 11, color: "#5a7a5c", letterSpacing: 2, textTransform: "uppercase", marginBottom: 32 }}>2026 TX Branded · Wilbur-Ellis</p>
 
-        {mode === "password" ? (
-          <React.Fragment>
-            <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)} className="we-login-input"
-              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
-            <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} className="we-login-input"
-              onKeyDown={e => e.key === "Enter" && onLogin(un, pw)}
-              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
-            {error && <p style={{ color: "#ef4444", fontSize: 13, marginBottom: 8 }}>{error}</p>}
-            <button onClick={() => onLogin(un, pw)} disabled={loading}
-              style={{ width: "100%", padding: 14, background: loading ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
-              {loading ? "Signing in..." : "Sign In"}
-            </button>
-            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 16 }}>
-              <span onClick={() => setMode("magic")} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Email me a sign-in link instead</span>
-            </p>
-          </React.Fragment>
-        ) : magicSent ? (
-          <div style={{ padding: "10px 0" }}>
-            <div style={{ fontSize: 32, marginBottom: 10 }}>📩</div>
-            <div style={{ fontSize: 14, fontWeight: 700, color: "#eaf2eb", marginBottom: 8 }}>Check your email</div>
-            <div style={{ fontSize: 12, color: "#9ab8a0", lineHeight: 1.5 }}>If {magicEmail.trim()} has access, a sign-in link is on its way. Tap it to log in.</div>
-            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 20 }}>
-              <span onClick={() => { setMode("password"); setMagicSent(false); }} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Back to password sign-in</span>
-            </p>
-          </div>
-        ) : (
-          <React.Fragment>
-            <input type="email" placeholder="Work email" value={magicEmail} onChange={e => setMagicEmail(e.target.value)} className="we-login-input"
-              onKeyDown={e => e.key === "Enter" && sendMagicLink()}
-              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
-            <button onClick={sendMagicLink} disabled={magicSending}
-              style={{ width: "100%", padding: 14, background: magicSending ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: magicSending ? "wait" : "pointer" }}>
-              {magicSending ? "Sending..." : "Send Sign-In Link"}
-            </button>
-            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 16 }}>
-              <span onClick={() => setMode("password")} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Use password instead</span>
-            </p>
-          </React.Fragment>
-        )}
+        <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)} className="we-login-input"
+          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
+        <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} className="we-login-input"
+          onKeyDown={e => e.key === "Enter" && onLogin(un, pw)}
+          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+        {error && <p style={{ color: "#ef4444", fontSize: 13, marginBottom: 8 }}>{error}</p>}
+        <button onClick={() => onLogin(un, pw)} disabled={loading}
+          style={{ width: "100%", padding: 14, background: loading ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
+          {loading ? "Signing in..." : "Sign In"}
+        </button>
 
         <p style={{ fontSize: 10, color: "#3a5a3c", marginTop: 24 }}>
           Don't have access yet? <span onClick={() => setShowRequest(true)} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Request access</span>
@@ -1431,7 +1371,28 @@ function HourlyChart({ data }) {
 }
 
 // ═══ ACCESS REQUESTS (Admin Only) ═══
-function AccessRequestsPanel({ requests, onRefresh }) {
+// Matches a request's free-text "location_text" (typed by the requester
+// before login, when there's no real locations list to pick from -- see
+// RequestAccessModal) against the real `locations` table so Approve can
+// generate a complete, ready-to-paste SQL block with no manual lookup.
+// Exact name match wins outright; otherwise falls back to a substring match
+// (either direction, case-insensitive) so "Hart" matches "Hart" and a typo
+// like "Herford" still catches "Hereford". Multiple/no matches means the
+// generated SQL falls back to the old placeholder comment instead of
+// guessing wrong.
+function matchLocations(text, locations) {
+  if (!text || !locations?.length) return [];
+  const q = text.trim().toLowerCase();
+  if (!q) return [];
+  const exact = locations.filter(l => (l.name || "").toLowerCase() === q);
+  if (exact.length) return exact;
+  return locations.filter(l => {
+    const n = (l.name || "").toLowerCase();
+    return n.includes(q) || q.includes(n);
+  });
+}
+
+function AccessRequestsPanel({ requests, onRefresh, locations }) {
   const [approvingId, setApprovingId] = useState(null);
   const [uidInput, setUidInput] = useState("");
   const [generatedSql, setGeneratedSql] = useState("");
@@ -1461,13 +1422,22 @@ function AccessRequestsPanel({ requests, onRefresh }) {
     if (!uidInput.trim()) { setActionError("Paste the User ID from Supabase first."); return; }
     setActionError("");
     const esc = s => (s || "").replace(/'/g, "''");
-    const sql =
-`insert into public.profiles (id, role, district, display_name, email)
-values ('${esc(uidInput.trim())}', '${r.requested_role}', '${r.requested_district}', '${esc(r.name)}', '${esc(r.email)}');
+    const matches = matchLocations(r.location_text, locations);
 
--- location_ids left unset -- confirm the real location id(s) for
--- "${esc(r.location_text) || "unspecified"}" in the locations table, then run:
--- update public.profiles set location_ids = array[...] where id = '${esc(uidInput.trim())}';
+    let locationClause, locationNote;
+    if (matches.length === 1) {
+      locationClause = `, location_ids)\nvalues ('${esc(uidInput.trim())}', '${r.requested_role}', '${r.requested_district}', '${esc(r.name)}', '${esc(r.email)}', array['${esc(matches[0].id)}']);`;
+      locationNote = `-- matched location: ${matches[0].name} (${matches[0].id})`;
+    } else {
+      locationClause = `)\nvalues ('${esc(uidInput.trim())}', '${r.requested_role}', '${r.requested_district}', '${esc(r.name)}', '${esc(r.email)}');`;
+      locationNote = matches.length === 0
+        ? `-- no location match for "${esc(r.location_text) || "unspecified"}" -- confirm the real location id in the locations table, then run:\n-- update public.profiles set location_ids = array['...'] where id = '${esc(uidInput.trim())}';`
+        : `-- multiple locations matched "${esc(r.location_text)}" (${matches.map(m => m.name + " / " + m.id).join(", ")}) -- pick the right one, then run:\n-- update public.profiles set location_ids = array['...'] where id = '${esc(uidInput.trim())}';`;
+    }
+
+    const sql =
+`insert into public.profiles (id, role, district, name, username${locationClause}
+${locationNote}
 
 update public.access_requests set status = 'approved', decided_at = now() where id = '${r.id}';`;
     setGeneratedSql(sql);
@@ -5174,7 +5144,7 @@ function App() {
       )}
 
       {appMode === "access" && isAdmin && (
-        <AccessRequestsPanel requests={accessRequests} onRefresh={refreshAccessRequests} />
+        <AccessRequestsPanel requests={accessRequests} onRefresh={refreshAccessRequests} locations={locations} />
       )}
     </div>
   );
