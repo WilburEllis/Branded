@@ -62,6 +62,7 @@ document.documentElement.dataset.weTheme = localStorage.getItem("we_theme") === 
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
 // ═══ SUPABASE CLIENT ═══
+const ACCESS_REQUEST_EMAIL = "nburson@wilburellis.com";
 const SUPABASE_URL = "https://gumpxdchfqatszeuldvm.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd1bXB4ZGNoZnFhdHN6ZXVsZHZtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzI5OTYyNzcsImV4cCI6MjA4ODU3MjI3N30.AtMh0jDDKctXupluF5fqThMb58xOUjlNoy1RTcwmxRQ";
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
@@ -198,6 +199,20 @@ function calcUreaPPA(pricePerGal, rateQtPerTon, lbsUreaPerAcre) {
 
 function natFloorOf(p) { return p.nat_target != null ? Math.round(p.nat_target * 0.95 * 100) / 100 : null; }
 
+// national_prices rows aren't the same shape as v_tx_pricing rows (e.g. cost
+// lives in `cost_2026`, not `cost`) -- this normalizes a raw national row
+// onto the fields the Profit Sheet's calc pipeline (costFor/rawPriceFor/
+// calcPPA) already reads, WITHOUT inventing data: whatever the row already
+// has (rate_unit, cat, oz_per_unit, etc., if the table has them) passes
+// through untouched via the spread; only `cost` gets a fallback. Since the
+// row has no w_target/e_target/w_floor/e_floor at all, rawPriceFor's
+// existing "fall back to nat_target when the district value is missing"
+// logic kicks in automatically and labels it "(Nat)" -- no separate branch
+// needed. Wholesale has no national equivalent, so it correctly shows "—".
+function adaptNational(p) {
+  return { ...p, cost: p.cost != null ? p.cost : p.cost_2026, isNationalOnly: true };
+}
+
 // ═══ CATEGORY COLOR SYSTEM ═══
 // Preset swatches offered in the Manage Categories picker. Nathan can assign
 // any of these (or a custom hex) to any category; these are just the palette.
@@ -237,19 +252,20 @@ function resolvePrice(p, district, location, overridesMap) {
       return { floor: ov.floor_price, target: ov.target_price, label: ov.location_name || location, isOverride: true };
     }
   }
-  // A product counts as having a TX footprint if EITHER district has its own
-  // price row. If the district we're asked about is missing one (e.g. the
-  // ETX override was cleared this cycle), fall back to the national price
-  // instead of hiding the price entirely -- but only for products that are
-  // already TX-provisioned, not every national-only reference product.
-  const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
+  // Cascade, per Nathan (2026-09-01): Location override (above) -> District
+  // price -> National price. Used to require SOME district price to already
+  // exist before falling back to National (see git-blame-equivalent history
+  // in project memory) -- that gate is gone now; a product with zero
+  // district pricing at all (e.g. newly added to skus straight from
+  // National Ref, nothing in district_prices yet) now correctly falls all
+  // the way through to National instead of showing no price.
   if (district === "wtx") {
     if (p.w_target != null || p.w_floor != null) return { floor: p.w_floor, target: p.w_target, label: "West TX", isOverride: false };
-    if (hasAnyDistrictPrice && p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "West TX", isOverride: false, isNationalFallback: true };
+    if (p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "West TX", isOverride: false, isNationalFallback: true };
     return { floor: null, target: null, label: "West TX", isOverride: false };
   }
   if (p.e_target != null || p.e_floor != null) return { floor: p.e_floor, target: p.e_target, label: "East TX", isOverride: false };
-  if (hasAnyDistrictPrice && p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "East TX", isOverride: false, isNationalFallback: true };
+  if (p.nat_target != null) return { floor: natFloorOf(p), target: p.nat_target, label: "East TX", isOverride: false, isNationalFallback: true };
   return { floor: null, target: null, label: "East TX", isOverride: false };
 }
 
@@ -292,23 +308,184 @@ function LoadingScreen() {
 function LoginScreen({ onLogin, error, loading }) {
   const [un, setUn] = useState("");
   const [pw, setPw] = useState("");
+  const [showRequest, setShowRequest] = useState(false);
+  const [mode, setMode] = useState("password"); // "password" | "magic"
+  const [magicEmail, setMagicEmail] = useState("");
+  const [magicSending, setMagicSending] = useState(false);
+  const [magicSent, setMagicSent] = useState(false);
+
+  // shouldCreateUser:false means an email with no existing account errors
+  // out server-side instead of silently creating one -- see access-request
+  // flow above for how someone actually gets an account. The UI shows the
+  // same "check your email" message either way (never a distinct "no
+  // account found" error) so a random email can't be used to probe whether
+  // a given address has access -- same reasoning as any password-reset
+  // flow that doesn't confirm/deny account existence.
+  async function sendMagicLink() {
+    if (!magicEmail.trim()) return;
+    setMagicSending(true);
+    await supabaseClient.auth.signInWithOtp({
+      email: magicEmail.trim(),
+      options: {
+        shouldCreateUser: false,
+        emailRedirectTo: window.location.origin + window.location.pathname,
+      },
+    });
+    setMagicSending(false);
+    setMagicSent(true);
+  }
+
   return (
     <div style={{ minHeight: "100vh", background: "linear-gradient(145deg,#0a120b,#0f1f12 50%,#0a120b)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
       <div style={{ width: "100%", maxWidth: 380, textAlign: "center" }}>
         <div style={{ fontSize: 42, marginBottom: 8 }}>🌿</div>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: S.green, letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>WE Price Lookup</h1>
         <p style={{ fontSize: 11, color: "#5a7a5c", letterSpacing: 2, textTransform: "uppercase", marginBottom: 32 }}>2026 TX Branded · Wilbur-Ellis</p>
-        <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)} className="we-login-input"
-          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
-        <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} className="we-login-input"
-          onKeyDown={e => e.key === "Enter" && onLogin(un, pw)}
-          style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
-        {error && <p style={{ color: "#ef4444", fontSize: 13, marginBottom: 8 }}>{error}</p>}
-        <button onClick={() => onLogin(un, pw)} disabled={loading}
-          style={{ width: "100%", padding: 14, background: loading ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
-          {loading ? "Signing in..." : "Sign In"}
-        </button>
-        <p style={{ fontSize: 10, color: "#3a5a3c", marginTop: 24 }}>Contact your territory manager for access</p>
+
+        {mode === "password" ? (
+          <React.Fragment>
+            <input type="text" placeholder="Email" value={un} onChange={e => setUn(e.target.value)} className="we-login-input"
+              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 10, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
+            <input type="password" placeholder="Password" value={pw} onChange={e => setPw(e.target.value)} className="we-login-input"
+              onKeyDown={e => e.key === "Enter" && onLogin(un, pw)}
+              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+            {error && <p style={{ color: "#ef4444", fontSize: 13, marginBottom: 8 }}>{error}</p>}
+            <button onClick={() => onLogin(un, pw)} disabled={loading}
+              style={{ width: "100%", padding: 14, background: loading ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: loading ? "wait" : "pointer" }}>
+              {loading ? "Signing in..." : "Sign In"}
+            </button>
+            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 16 }}>
+              <span onClick={() => setMode("magic")} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Email me a sign-in link instead</span>
+            </p>
+          </React.Fragment>
+        ) : magicSent ? (
+          <div style={{ padding: "10px 0" }}>
+            <div style={{ fontSize: 32, marginBottom: 10 }}>📩</div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "#eaf2eb", marginBottom: 8 }}>Check your email</div>
+            <div style={{ fontSize: 12, color: "#9ab8a0", lineHeight: 1.5 }}>If {magicEmail.trim()} has access, a sign-in link is on its way. Tap it to log in.</div>
+            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 20 }}>
+              <span onClick={() => { setMode("password"); setMagicSent(false); }} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Back to password sign-in</span>
+            </p>
+          </div>
+        ) : (
+          <React.Fragment>
+            <input type="email" placeholder="Work email" value={magicEmail} onChange={e => setMagicEmail(e.target.value)} className="we-login-input"
+              onKeyDown={e => e.key === "Enter" && sendMagicLink()}
+              style={{ width: "100%", padding: "14px 18px", background: "#131c14", border: "2px solid #2a3a2c", borderRadius: 12, color: "#eaf2eb", fontSize: 16, outline: "none", marginBottom: 12, boxSizing: "border-box" }} autoFocus autoComplete="off" autoCapitalize="off" />
+            <button onClick={sendMagicLink} disabled={magicSending}
+              style={{ width: "100%", padding: 14, background: magicSending ? S.border : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 12, color: "#fff", fontSize: 15, fontWeight: 700, cursor: magicSending ? "wait" : "pointer" }}>
+              {magicSending ? "Sending..." : "Send Sign-In Link"}
+            </button>
+            <p style={{ fontSize: 11, color: "#5a7a5c", marginTop: 16 }}>
+              <span onClick={() => setMode("password")} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Use password instead</span>
+            </p>
+          </React.Fragment>
+        )}
+
+        <p style={{ fontSize: 10, color: "#3a5a3c", marginTop: 24 }}>
+          Don't have access yet? <span onClick={() => setShowRequest(true)} style={{ color: S.green, cursor: "pointer", textDecoration: "underline" }}>Request access</span>
+        </p>
+      </div>
+      {showRequest && <RequestAccessModal onClose={() => setShowRequest(false)} />}
+    </div>
+  );
+}
+
+// ═══ REQUEST ACCESS (pre-login) ═══
+function RequestAccessModal({ onClose }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("sales");
+  const [district, setDistrict] = useState("wtx");
+  const [locationText, setLocationText] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [sent, setSent] = useState(false);
+
+  async function submit() {
+    if (!name.trim() || !email.trim()) { setSubmitError("Name and email are required."); return; }
+    setSubmitting(true);
+    setSubmitError("");
+    const { error } = await supabaseClient.from("access_requests").insert({
+      name: name.trim(),
+      email: email.trim(),
+      requested_role: role,
+      requested_district: district,
+      location_text: locationText.trim() || null,
+    });
+    setSubmitting(false);
+    if (error) { setSubmitError("Couldn't submit: " + error.message); return; }
+
+    const subject = encodeURIComponent("WE Price Access Request - " + name.trim());
+    const body = encodeURIComponent(
+      "Name: " + name.trim() + "\n" +
+      "Email: " + email.trim() + "\n" +
+      "Requested Role: " + (role === "manager" ? "Manager" : "Sales") + "\n" +
+      "Requested District: " + (district === "wtx" ? "West TX" : "East TX") + "\n" +
+      "Location/Branch: " + (locationText.trim() || "(not specified)") + "\n"
+    );
+    window.location.href = "mailto:" + ACCESS_REQUEST_EMAIL + "?subject=" + subject + "&body=" + body;
+    setSent(true);
+  }
+
+  const btnStyle = (active) => ({
+    flex: 1, fontSize: 12, fontWeight: 700, color: active ? "#fff" : "#eaf2eb",
+    background: active ? "#2d6b3f" : "#131c14", border: "1px solid " + (active ? "#4caf6a" : "#2a3a2c"),
+    padding: "8px 6px", borderRadius: 8, cursor: "pointer",
+  });
+
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,.65)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: "#0f1f12", border: "1px solid #2a3a2c", borderRadius: 16, maxWidth: 420, width: "100%", maxHeight: "85vh", overflowY: "auto", padding: 22 }}>
+        {sent ? (
+          <React.Fragment>
+            <div style={{ fontSize: 32, marginBottom: 10 }}>✅</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#eaf2eb", marginBottom: 8 }}>Request submitted</div>
+            <div style={{ fontSize: 12, color: "#9ab8a0", marginBottom: 18, lineHeight: 1.5 }}>
+              An email draft with your info should have opened in your mail app -- send it if it didn't go automatically. Nathan will follow up once he's reviewed it.
+            </div>
+            <button onClick={onClose} style={{ width: "100%", padding: 12, background: "#2d6b3f", border: "none", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Close</button>
+          </React.Fragment>
+        ) : (
+          <React.Fragment>
+            <div style={{ fontSize: 16, fontWeight: 800, color: "#eaf2eb", marginBottom: 4 }}>Request Access</div>
+            <div style={{ fontSize: 11, color: "#9ab8a0", marginBottom: 16 }}>Nathan reviews and approves every request personally.</div>
+
+            <div style={{ fontSize: 10, color: "#9ab8a0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Name</div>
+            <input value={name} onChange={e => setName(e.target.value)} className="we-login-input"
+              style={{ width: "100%", padding: "10px 12px", background: "#131c14", border: "1.5px solid #2a3a2c", borderRadius: 8, color: "#eaf2eb", fontSize: 14, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+
+            <div style={{ fontSize: 10, color: "#9ab8a0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Work Email</div>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="we-login-input"
+              style={{ width: "100%", padding: "10px 12px", background: "#131c14", border: "1.5px solid #2a3a2c", borderRadius: 8, color: "#eaf2eb", fontSize: 14, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+
+            <div style={{ fontSize: 10, color: "#9ab8a0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Role</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <button onClick={() => setRole("sales")} style={btnStyle(role === "sales")}>Sales</button>
+              <button onClick={() => setRole("manager")} style={btnStyle(role === "manager")}>Manager</button>
+            </div>
+
+            <div style={{ fontSize: 10, color: "#9ab8a0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>District</div>
+            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+              <button onClick={() => setDistrict("wtx")} style={btnStyle(district === "wtx")}>West TX</button>
+              <button onClick={() => setDistrict("etx")} style={btnStyle(district === "etx")}>East TX</button>
+            </div>
+
+            <div style={{ fontSize: 10, color: "#9ab8a0", textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Location / Branch</div>
+            <input value={locationText} onChange={e => setLocationText(e.target.value)} className="we-login-input" placeholder="e.g. Hereford"
+              style={{ width: "100%", padding: "10px 12px", background: "#131c14", border: "1.5px solid #2a3a2c", borderRadius: 8, color: "#eaf2eb", fontSize: 14, outline: "none", marginBottom: 12, boxSizing: "border-box" }} />
+
+            {submitError && <p style={{ color: "#ef4444", fontSize: 12, marginBottom: 10 }}>{submitError}</p>}
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={onClose} style={{ fontSize: 13, color: "#9ab8a0", background: "#131c14", border: "1px solid #2a3a2c", padding: "12px 14px", borderRadius: 10, cursor: "pointer" }}>Cancel</button>
+              <button onClick={submit} disabled={submitting}
+                style={{ flex: 1, padding: 12, background: submitting ? "#2a3a2c" : "linear-gradient(135deg,#2d6b3f,#4caf6a)", border: "none", borderRadius: 10, color: "#fff", fontSize: 13, fontWeight: 700, cursor: submitting ? "wait" : "pointer" }}>
+                {submitting ? "Submitting..." : "Submit Request"}
+              </button>
+            </div>
+          </React.Fragment>
+        )}
       </div>
     </div>
   );
@@ -435,7 +612,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       if (!ppa) return null;
       return (
         <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? (() => {
+          <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Price Per Acre{ppa.per100 ? (() => {
             return <span> (<RateInput rate={customGPA} unit="GPA" color={S.green} onChange={v => setCustomGPA(v)} /> GPA)</span>;
           })() : ""} — {priceLabel}</div>
           <div style={{ fontSize: 16, fontWeight: 700, color: S.green }}>{fmtAc(ppa.val)}</div>
@@ -715,9 +892,13 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         hasLocOverride = true;
       }
     }
-    const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
     const natFloor = natFloorOf(p);
-    // If location override exists for sales rep, USE it as the main price
+    // Cascade (2026-09-01, Nathan's spec): Location override -> District ->
+    // National, same as resolvePrice() above -- no gate requiring some
+    // district price to already exist. Reps never see "(Nat)"/"(National)"
+    // or any color distinction for a national-fallback price -- they just
+    // see a price, same as a real district price. Only the admin card
+    // (further up this component) shows the "(Nat)" indicator.
     if (hasLocOverride) {
       target = locOverride.target; floor = locOverride.floor;
       const loc = allLocations.find(l => l.id === location);
@@ -726,21 +907,21 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     } else if (district === "wtx") {
       if (p.w_target != null || p.w_floor != null) {
         target = p.w_target; floor = p.w_floor; label = "West TX";
-      } else if (hasAnyDistrictPrice && p.nat_target != null) {
-        target = p.nat_target; floor = natFloor; label = "West TX (National)"; isNatFallback = true;
+      } else if (p.nat_target != null) {
+        target = p.nat_target; floor = natFloor; label = "West TX"; isNatFallback = true;
       } else {
         target = null; floor = null; label = "West TX";
       }
-      accentColor = isNatFallback ? S.blue : S.amber;
+      accentColor = S.amber;
     } else {
       if (p.e_target != null || p.e_floor != null) {
         target = p.e_target; floor = p.e_floor; label = "East TX";
-      } else if (hasAnyDistrictPrice && p.nat_target != null) {
-        target = p.nat_target; floor = natFloor; label = "East TX (National)"; isNatFallback = true;
+      } else if (p.nat_target != null) {
+        target = p.nat_target; floor = natFloor; label = "East TX"; isNatFallback = true;
       } else {
         target = null; floor = null; label = "East TX";
       }
-      accentColor = isNatFallback ? S.blue : S.green;
+      accentColor = S.green;
     }
   }
 
@@ -831,7 +1012,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       if (ppa) {
         ppaSection = (
           <div style={{ background: "rgba(76,175,106,.08)", border: "1px solid rgba(76,175,106,.2)", borderRadius: 8, padding: "8px 10px", margin: "8px 0" }}>
-            <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Cost Per Acre{ppa.per100 ? " (20 GPA)" : ""}</div>
+            <div style={{ fontSize: 9, color: S.green, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>💰 Price Per Acre{ppa.per100 ? " (20 GPA)" : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 700, color: S.green }}>{fmtAc(ppa.val)}</div>
             <div style={{ fontSize: 10, color: S.muted, marginTop: 2 }}>@ {p.rate_min} {p.rate_unit} · {activePriceLabel}</div>
           </div>
@@ -856,17 +1037,19 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       </div>
 
       {showManagerCompare ? (() => {
-        const hasAnyDistrictPrice = p.w_target != null || p.w_floor != null || p.e_target != null || p.e_floor != null;
+        // Managers see the "(Nat)" indicator same as admin (no gate
+        // requiring some district price to already exist -- 2026-09-01
+        // cascade fix, same as the sales card and resolvePrice() above).
         const mgrNatFloor = natFloorOf(p);
         const distPr = district === "wtx"
           ? (p.w_target != null || p.w_floor != null
               ? { target: p.w_target, floor: p.w_floor, label: "West TX" }
-              : (hasAnyDistrictPrice && p.nat_target != null
+              : (p.nat_target != null
                   ? { target: p.nat_target, floor: mgrNatFloor, label: "West TX (Nat)" }
                   : { target: null, floor: null, label: "West TX" }))
           : (p.e_target != null || p.e_floor != null
               ? { target: p.e_target, floor: p.e_floor, label: "East TX" }
-              : (hasAnyDistrictPrice && p.nat_target != null
+              : (p.nat_target != null
                   ? { target: p.nat_target, floor: mgrNatFloor, label: "East TX (Nat)" }
                   : { target: null, floor: null, label: "East TX" }));
         const mgrLocOverrides = locationIds.map(lid => {
@@ -967,6 +1150,190 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
 }
 
 
+// ═══ TILL-IT BLENDS TAB (2026-09-01) ═══
+// Read-only Floor Price reference, pulled from till_it_blend_prices (same
+// table the Blend Calculator's Till-It Blend picker reads -- see that
+// component for the FertHub push pipeline that keeps it current). Nathan's
+// spec: reps see only their own location's price, no picker at all;
+// managers get a picker among just their own assigned locations; admins get
+// a District toggle (West/East) plus a Location dropdown that only matters
+// on the East side, since every West TX location shares Hereford's number.
+const TILL_IT_BUCKET_LABELS = { lonestar: "Lonestar", batesville: "Batesville", rgv: "RGV", hereford_wtx: "West TX (Hereford)" };
+
+function locationNameToBucket(name, dist) {
+  const n = (name || "").toLowerCase();
+  if (n === "lonestar") return "lonestar";
+  if (n === "batesville") return "batesville";
+  if (n === "rgv") return "rgv";
+  return dist === "wtx" ? "hereford_wtx" : null;
+}
+
+// Relative "how old is this price" display for Till-It Blends (2026-09-01,
+// Nathan's request -- needs to spot a stale cost at a glance, not just via
+// the one hardcoded Batesville flag). Returns both a short relative label
+// and the days-old count so the caller can color it as a warning past some
+// threshold.
+function daysAgo(isoString) {
+  if (!isoString) return null;
+  const then = new Date(isoString).getTime();
+  if (isNaN(then)) return null;
+  return Math.floor((Date.now() - then) / 86400000);
+}
+function timeAgoLabel(days) {
+  if (days == null) return "unknown";
+  if (days <= 0) return "today";
+  if (days === 1) return "1 day ago";
+  if (days < 30) return days + " days ago";
+  const months = Math.round(days / 30);
+  return months === 1 ? "1 month ago" : months + " months ago";
+}
+
+function TillItBlendsView({ tillItBlendPrices, isAdmin, isManager, profile, locations, labelUrls, hideCost }) {
+  const [adminDistrict, setAdminDistrict] = useState("wtx");
+  const [adminEastLoc, setAdminEastLoc] = useState("lonestar");
+  const [managerBucket, setManagerBucket] = useState(null);
+
+  const dist = profile.district;
+  const myLocIds = profile.location_ids || [];
+
+  const managerBuckets = useMemo(() => {
+    if (!isManager) return [];
+    const set = new Set();
+    myLocIds.forEach(lid => {
+      const b = locationNameToBucket(locations.find(l => l.id === lid)?.name, dist);
+      if (b) set.add(b);
+    });
+    return [...set];
+  }, [isManager, myLocIds, locations, dist]);
+
+  let bucket;
+  if (isAdmin) {
+    bucket = adminDistrict === "wtx" ? "hereford_wtx" : adminEastLoc;
+  } else if (isManager) {
+    bucket = managerBucket || managerBuckets[0] || null;
+  } else {
+    bucket = locationNameToBucket(locations.find(l => l.id === (myLocIds[0] || null))?.name, dist);
+  }
+
+  const rows = (tillItBlendPrices || []).filter(r => r.location_bucket === bucket)
+    .sort((a, b) => a.blend_name.localeCompare(b.blend_name));
+
+  // Grouped the same way Nathan's own FertHub "Pricing Results" page groups
+  // them (2026-09-01) -- category comes straight from the row itself
+  // (set by generate_till_it_blend_prices.py), not inferred client-side.
+  const CATEGORY_ORDER = ["nitrogen", "phosphate", "dry"];
+  const CATEGORY_LABELS = { nitrogen: "NITROGEN BLENDS", phosphate: "PHOSPHATE STARTER BLENDS", dry: "DRY BLENDS ($/lb)" };
+  // Distinct color + icon per section (2026-09-01, Nathan's request --
+  // plain same-color text doesn't stand out for him) -- reuses the same
+  // green/blue/amber distinction already used for West/East/admin accents
+  // elsewhere in this app, so it stays visually consistent, not arbitrary.
+  const CATEGORY_COLORS = { nitrogen: S.blue, phosphate: S.green, dry: S.amber };
+  const CATEGORY_TINT = { nitrogen: "rgba(91,155,213,.14)", phosphate: "rgba(76,175,106,.14)", dry: "rgba(232,162,48,.14)" };
+  const CATEGORY_ICONS = { nitrogen: "💧", phosphate: "🌱", dry: "⚪" };
+  const groupedRows = CATEGORY_ORDER.map(cat => ({ cat, items: rows.filter(r => (r.category || "nitrogen") === cat) })).filter(g => g.items.length > 0);
+
+  return (
+    <div>
+      {isAdmin && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["wtx", "etx"].map(key => (
+              <button key={key} onClick={() => setAdminDistrict(key)}
+                style={{ fontSize: 11, fontWeight: 700, color: adminDistrict === key ? S.onAccent : S.green, background: adminDistrict === key ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (adminDistrict === key ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>
+                {key === "wtx" ? "West TX" : "East TX"}
+              </button>
+            ))}
+          </div>
+          {adminDistrict === "etx" && (
+            <select value={adminEastLoc} onChange={e => setAdminEastLoc(e.target.value)}
+              style={{ padding: "6px 10px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 12 }}>
+              <option value="lonestar">Lonestar</option>
+              <option value="batesville">Batesville</option>
+              <option value="rgv">RGV</option>
+            </select>
+          )}
+        </div>
+      )}
+
+      {!isAdmin && isManager && managerBuckets.length > 1 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {managerBuckets.map(b => (
+            <button key={b} onClick={() => setManagerBucket(b)}
+              style={{ fontSize: 11, fontWeight: 700, color: (managerBucket || managerBuckets[0]) === b ? S.onAccent : S.green, background: (managerBucket || managerBuckets[0]) === b ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + ((managerBucket || managerBuckets[0]) === b ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>
+              {TILL_IT_BUCKET_LABELS[b]}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!bucket && (
+        <div style={{ textAlign: "center", padding: "60px 20px", color: S.muted }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>🧪</div>
+          <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No Till-It Blend pricing for your location yet</div>
+          <div style={{ fontSize: 12 }}>Available at Lonestar, Batesville, RGV, and West TX so far.</div>
+        </div>
+      )}
+
+      {bucket && rows.length === 0 && (
+        <div style={{ textAlign: "center", padding: "40px 20px", color: S.muted, fontSize: 12 }}>
+          No Till-It Blends currently priced for {TILL_IT_BUCKET_LABELS[bucket]}.
+        </div>
+      )}
+
+      {groupedRows.map(g => (
+        <React.Fragment key={g.cat}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 800, color: CATEGORY_COLORS[g.cat], textTransform: "uppercase", letterSpacing: 1, background: CATEGORY_TINT[g.cat], borderLeft: "5px solid " + CATEGORY_COLORS[g.cat], padding: "8px 12px", borderRadius: 6, marginBottom: 10, marginTop: 16 }}>
+            <span style={{ fontSize: 16 }}>{CATEGORY_ICONS[g.cat]}</span>
+            {CATEGORY_LABELS[g.cat]}
+          </div>
+          {g.items.map(r => {
+            const isDry = g.cat === "dry";
+            const floorVal = isDry ? r.target_price_per_lb : r.target_price_per_gal;
+            const costVal = isDry ? r.cost_per_lb : r.cost_per_gal;
+            return (
+              <div key={r.blend_id} style={{ background: S.card, border: "1px solid " + S.border, borderLeft: "4px solid " + CATEGORY_COLORS[g.cat], borderRadius: 10, marginBottom: 8, padding: "12px 14px 12px 12px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700, color: S.textStrong }}>{r.blend_name}</div>
+                      {labelUrls && labelUrls[r.blend_name] && (
+                        <a href={labelUrls[r.blend_name]} target="_blank" rel="noopener noreferrer"
+                          title="Open product label" style={{ fontSize: 12, color: S.blue, textDecoration: "none" }}>📄</a>
+                      )}
+                    </div>
+                    {(() => {
+                      const d = daysAgo(r.as_of_date);
+                      const isOld = d != null && d > 30;
+                      return (
+                        <div style={{ fontSize: 10, color: (isOld || r.is_stale) ? "#ef4444" : S.muted, marginTop: 2 }}
+                          title={r.as_of_date ? new Date(r.as_of_date).toLocaleDateString() : ""}>
+                          #{r.jde_item} · Updated {timeAgoLabel(d)}{(isOld || r.is_stale) ? " ⚠" : ""}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div style={{ textAlign: "right", flexShrink: 0 }}>
+                    <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: .5 }}>Floor (${isDry ? "/lb" : "/gal"})</div>
+                    <div style={{ fontSize: 18, fontWeight: 800, color: S.amber }}>${floorVal != null ? floorVal.toFixed(2) : "—"}</div>
+                  </div>
+                </div>
+                {isAdmin && !hideCost && (
+                  <div style={{ display: "flex", gap: 16, marginTop: 8, paddingTop: 8, borderTop: "1px solid " + S.border, fontSize: 11 }}>
+                    <div><span style={{ color: S.muted }}>Cost{isDry ? "/lb" : "/gal"}: </span><span style={{ fontWeight: 700 }}>${costVal != null ? costVal.toFixed(2) : "—"}</span></div>
+                    {!isDry && <div><span style={{ color: S.muted }}>Floor/ton: </span><span style={{ fontWeight: 700 }}>${r.target_price_per_ton.toFixed(2)}</span></div>}
+                    <div><span style={{ color: S.muted }}>Margin: </span><span style={{ fontWeight: 700 }}>{(r.margin * 100).toFixed(0)}%</span></div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
+
 // ═══ ANALYTICS CHARTS ═══
 function UsageChart({ data }) {
   const canvasRef = useRef(null);
@@ -1055,6 +1422,131 @@ function HourlyChart({ data }) {
   }, [data]);
 
   return <div style={{ height: 160 }}><canvas ref={canvasRef} /></div>;
+}
+
+// ═══ ACCESS REQUESTS (Admin Only) ═══
+function AccessRequestsPanel({ requests, onRefresh }) {
+  const [approvingId, setApprovingId] = useState(null);
+  const [uidInput, setUidInput] = useState("");
+  const [generatedSql, setGeneratedSql] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [busyId, setBusyId] = useState(null);
+
+  const pending = requests.filter(r => r.status === "pending");
+  const decided = requests.filter(r => r.status !== "pending").slice(0, 20);
+
+  async function deny(id) {
+    setBusyId(id);
+    setActionError("");
+    const { error } = await supabaseClient.from("access_requests").update({ status: "denied", decided_at: new Date().toISOString() }).eq("id", id);
+    setBusyId(null);
+    if (error) { setActionError("Couldn't deny: " + error.message); return; }
+    onRefresh();
+  }
+
+  function startApprove(id) {
+    setApprovingId(id);
+    setUidInput("");
+    setGeneratedSql("");
+    setActionError("");
+  }
+
+  function generateSql(r) {
+    if (!uidInput.trim()) { setActionError("Paste the User ID from Supabase first."); return; }
+    setActionError("");
+    const esc = s => (s || "").replace(/'/g, "''");
+    const sql =
+`insert into public.profiles (id, role, district, display_name, email)
+values ('${esc(uidInput.trim())}', '${r.requested_role}', '${r.requested_district}', '${esc(r.name)}', '${esc(r.email)}');
+
+-- location_ids left unset -- confirm the real location id(s) for
+-- "${esc(r.location_text) || "unspecified"}" in the locations table, then run:
+-- update public.profiles set location_ids = array[...] where id = '${esc(uidInput.trim())}';
+
+update public.access_requests set status = 'approved', decided_at = now() where id = '${r.id}';`;
+    setGeneratedSql(sql);
+  }
+
+  const rowStyle = { background: S.card, border: "1px solid " + S.border, borderRadius: 10, padding: 14, marginBottom: 10 };
+
+  return (
+    <div style={{ padding: "6px 12px 80px" }}>
+      <div style={{ fontSize: 16, fontWeight: 800, color: S.text, marginBottom: 2 }}>🔔 Access Requests</div>
+      <div style={{ fontSize: 11, color: S.muted, marginBottom: 16 }}>
+        Submitted from the login screen's "Request access" link.{" "}
+        <span onClick={onRefresh} style={{ color: S.blue, cursor: "pointer", textDecoration: "underline" }}>🔄 Refresh</span>
+      </div>
+
+      {actionError && <div style={{ fontSize: 12, color: "#ef4444", marginBottom: 12 }}>{actionError}</div>}
+
+      {pending.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 20px", color: S.muted }}>
+          <div style={{ fontSize: 32, marginBottom: 10 }}>📭</div>
+          <div style={{ fontSize: 13 }}>No pending requests</div>
+        </div>
+      ) : pending.map(r => (
+        <div key={r.id} style={rowStyle}>
+          <div style={{ display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: S.text }}>{r.name}</div>
+              <div style={{ fontSize: 12, color: S.muted }}>{r.email}</div>
+            </div>
+            <div style={{ fontSize: 10, color: S.muted, textAlign: "right" }}>
+              {new Date(r.requested_at).toLocaleString()}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8, marginBottom: 10 }}>
+            <span style={{ fontSize: 10, fontWeight: 700, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "3px 8px" }}>{r.requested_role === "manager" ? "Manager" : "Sales"}</span>
+            <span style={{ fontSize: 10, fontWeight: 700, color: S.amber, background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.3)", borderRadius: 6, padding: "3px 8px" }}>{r.requested_district === "wtx" ? "West TX" : "East TX"}</span>
+            {r.location_text && <span style={{ fontSize: 10, fontWeight: 700, color: S.green, background: "rgba(76,175,106,.1)", border: "1px solid rgba(76,175,106,.3)", borderRadius: 6, padding: "3px 8px" }}>{r.location_text}</span>}
+          </div>
+
+          {approvingId === r.id ? (
+            <div style={{ background: S.bg, border: "1px solid " + S.border, borderRadius: 8, padding: 12 }}>
+              <div style={{ fontSize: 11, color: S.muted, marginBottom: 8, lineHeight: 1.5 }}>
+                1. In Supabase: Authentication → Users → Add User → enter <b>{r.email}</b> (Auto Confirm on, no password needed). Copy the new User UID.<br />
+                2. Paste that UID below and generate the SQL to finish setting up their profile.
+              </div>
+              <input value={uidInput} onChange={e => setUidInput(e.target.value)} placeholder="Pasted User UID"
+                style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 12, padding: "7px 9px", outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
+              <div style={{ display: "flex", gap: 6, marginBottom: generatedSql ? 8 : 0 }}>
+                <button onClick={() => setApprovingId(null)} style={{ fontSize: 11, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "7px 10px", borderRadius: 6, cursor: "pointer" }}>Cancel</button>
+                <button onClick={() => generateSql(r)} style={{ flex: 1, fontSize: 11, fontWeight: 700, color: S.onAccent, background: S.amber, border: "none", padding: "7px 10px", borderRadius: 6, cursor: "pointer" }}>Generate SQL</button>
+              </div>
+              {generatedSql && (
+                <div>
+                  <textarea readOnly value={generatedSql} rows={8}
+                    style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 6, color: S.green, fontFamily: "monospace", fontSize: 11, padding: 8, boxSizing: "border-box", resize: "vertical" }} />
+                  <button onClick={() => navigator.clipboard?.writeText(generatedSql)}
+                    style={{ marginTop: 6, fontSize: 11, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>📋 Copy SQL</button>
+                  <div style={{ fontSize: 10, color: S.muted, marginTop: 6 }}>Paste and run this in the Supabase SQL Editor, then hit Refresh above.</div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 6 }}>
+              <button onClick={() => deny(r.id)} disabled={busyId === r.id}
+                style={{ fontSize: 11, fontWeight: 700, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", padding: "7px 12px", borderRadius: 6, cursor: "pointer" }}>✕ Deny</button>
+              <button onClick={() => startApprove(r.id)}
+                style={{ flex: 1, fontSize: 11, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", padding: "7px 12px", borderRadius: 6, cursor: "pointer" }}>✓ Approve</button>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {decided.length > 0 && (
+        <React.Fragment>
+          <div style={{ fontSize: 11, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: 1, margin: "20px 0 8px" }}>Recent Decisions</div>
+          {decided.map(r => (
+            <div key={r.id} style={{ ...rowStyle, opacity: .6, padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ fontSize: 12, color: S.text }}>{r.name} <span style={{ color: S.muted }}>({r.email})</span></div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: r.status === "approved" ? S.green : "#ef4444", textTransform: "uppercase" }}>{r.status}</span>
+            </div>
+          ))}
+        </React.Fragment>
+      )}
+    </div>
+  );
 }
 
 // ═══ ANALYTICS DASHBOARD (Admin Only) ═══
@@ -1859,32 +2351,67 @@ function AnalyticsDashboard() {
 }
 
 // ═══ BLEND PROFITABILITY CALCULATOR ═══
+// Weights verified against FertHub's own ingredientsLibrary (2026-08-31) --
+// ATS and 4-11-11 were wrong before (copy-paste artifacts): ATS was 11.06
+// (same as uan32, should be 10.80), 4-11-11 was 10.80 (should be 10.50).
+// 11-37-0 switched from 12.00 (a Simplot spec sheet) to FertHub's own 11.74
+// so the two tools agree. 28% UAN has no FertHub equivalent (not tracked
+// there at all) -- stays fully manual entry.
 const COMMODITIES = {
   uan28:  { name: "28% UAN",        weight: 10.60 },
   uan32:  { name: "32% UAN",        weight: 11.06 },
   "1034": { name: "10-34-0 (APP)",  weight: 11.65 },
-  ats:    { name: "12-0-0-26S (ATS)", weight: 11.06 },
-  "411":  { name: "4-11-11",        weight: 10.80 },
+  "1137": { name: "11-37-0 (APP)",  weight: 11.74 },
+  ats:    { name: "12-0-0-26S (ATS)", weight: 10.80 },
+  "411":  { name: "4-11-11",        weight: 10.50 },
   custom: { name: "Custom Blend",   weight: 0 }
 };
 
+// Rate ranges verified 2026-08-31 directly against each product's real label
+// (guaranteed analysis + directions for use, not a sell sheet) -- see
+// labelRate for the full picture across every use context on the label;
+// rateMin/rateMax/rateUnit/defaultRate drive the actual calculator and are
+// set to the single most relevant range for a bulk blend-truck audience
+// (Field/Row Crop rate where the label breaks out by crop, Fertigation/
+// Broadcast where it breaks out by application method). Re-verify before
+// reusing if a label gets updated.
+// Sorted alphabetically by label (the displayed name), per Nathan's request
+// 2026-09-01. label matches the real product name from txData/skus exactly
+// for every entry (Nathan corrected an earlier mix-up where Kilowatt
+// Base's label had briefly been changed to say "Foli-Gro" -- it's a
+// Till-It product, matchName was never touched either way).
 const VA_PRODUCT_DEFS = [
-  { matchName: "NDURE 2.0",              label: "NDURE 2.0",              cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 1, rateMax: 2, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA" },
-  { matchName: "NDURE DCD 25",           label: "NDURE DCD 25",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "250 GA" },
-  { matchName: "NDURE TRIPLE",           label: "NDURE TRIPLE",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA" },
-  { matchName: "FOLI-GRO KILO 0-0-24",  label: "FOLI-GRO KILO",         cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK" },
-  { matchName: "TILL-IT KILOWATT",       label: "TILL-IT KILOWATT",       cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK" },
-  { matchName: "TILL-IT DUO ZINC 9%",    label: "TILL-IT DUO ZINC 9%",    cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "TILL-IT 9% ZINC EDTA",   label: "TILL-IT 9% ZINC EDTA",   cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "PURIC PRIME",            label: "PURIC PRIME",            cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "PURIC FC",               label: "PURIC FC",               cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "275 GA" },
-  { matchName: "NUTRIO UNLOCK",          label: "NUTRIO UNLOCK",          cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "NUTRIO N-TUNE",          label: "NUTRIO N-TUNE",          cat: "N-Fixing Biological",  rateUnit: "qt/ac",  rateMin: 1, rateMax: 1, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "VERSATILE IRON",         label: "VERSATILE IRON",         cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA" },
-  { matchName: "VERSATILE AGRA-MIX II",  label: "VERSATILE AGRA-MIX II",  cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 3, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA" },
+  { matchName: "FOLI-GRO KILO 0-0-24",  label: "FOLI-GRO KILO",         cat: "Soil / Starter",      rateUnit: "gal/ac", rateMin: 0.5, rateMax: 5, defaultRate: 2, isNTreatment: false, preferPkg: "BULK",
+    labelRate: "Field/Row: 0.5–5 gal/ac foliar or fertigation · 1–12 qt/ac in-furrow at planting" },
+  { matchName: "FOLI-GRO MEGAWATT 4-11-13", label: "FOLI-GRO MEGAWATT",   cat: "Foliar / Starter",     rateUnit: "gal/ac", rateMin: 1, rateMax: 5, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil in-furrow/broadcast/fertigation: 1–5 gal/ac · Field/Row foliar: 1–3 gal/ac" },
+  { matchName: "NDURE 2.0",              label: "NDURE 2.0",              cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 1, rateMax: 2, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA",
+    labelRate: "Urea: 2 qt/ton (fixed) · UAN: 1 qt/ton (fixed)" },
+  { matchName: "NDURE DCD 25",           label: "NDURE DCD 25",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "250 GA",
+    labelRate: "UAN: 2–6 qt/ton · Anhydrous: 6–8 qt/ton · Aqua Ammonia: 4 qt/ton (fixed)" },
+  { matchName: "NDURE TRIPLE",           label: "NDURE TRIPLE",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 3, rateMax: 6, defaultRate: 3, isNTreatment: true, preferPkg: "270 GA",
+    labelRate: "UAN: 3–6 qt/ton · Urea: 3–4 qt/ton" },
+  { matchName: "NUTRIO N-TUNE",          label: "NUTRIO N-TUNE",          cat: "N-Fixing Biological",  rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Starter/fertigation/post-emerge: 1–2 qt/ac · Broadcast: up to 3 qt/ac" },
+  { matchName: "NUTRIO UNLOCK",          label: "NUTRIO UNLOCK",          cat: "Fertilizer Treatment", rateUnit: "qt/ac",  rateMin: 2, rateMax: 4, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Broadcast/Fertigation: 2–4 qt/ac · Starter/side-dress: 1–4 pt/ac" },
+  { matchName: "PURIC FC",               label: "PURIC FC",               cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "275 GA",
+    labelRate: "Foliar & Soil: 1–2 pt/ac" },
+  { matchName: "PURIC PRIME",            label: "PURIC PRIME",            cat: "Fertilizer Treatment", rateUnit: "gal/ac", rateMin: 0.25, rateMax: 5, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil: 1 qt–5 gal/ac (or more) · Foliar: 1–3 qt/ac · Fertigation: 1–5 gal/ac" },
+  { matchName: "TILL-IT 9% ZINC EDTA",   label: "TILL-IT 9% ZINC EDTA",   cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 4, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil: 1–4 qt/ac · Foliar (field/row/veg): 0.5–1 qt/ac (up to 2 qt/ac tree fruit)" },
+  { matchName: "TILL-IT DUO ZINC 9%",    label: "TILL-IT DUO ZINC 9%",    cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 8, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil (row/field): 1–8 qt/ac · Foliar: do not exceed 1 qt/ac (blended only)" },
+  { matchName: "TILL-IT KILOWATT BASE",  label: "TILL-IT KILOWATT BASE", cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK",
+    labelRate: "Soil/in-furrow: 2–6 qt/ac (+ up to 2 gal/ac fertigation) · Foliar: 1–6 qt/ac" },
+  { matchName: "VERSATILE AGRA-MIX II",  label: "VERSATILE AGRA-MIX II",  cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 4, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil: 1–4 qt/ac · Field/Row foliar: 0.5–1 qt/ac (up to 2 qt/ac tree fruit)" },
+  { matchName: "VERSATILE IRON",         label: "VERSATILE IRON",         cat: "Foliar / Starter",     rateUnit: "qt/ac",  rateMin: 1, rateMax: 4, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "Soil: 1–4 qt/ac · Field/Row foliar: 0.5–1 qt/ac (up to 2 qt/ac tree fruit)" },
 ];
 
-function BlendCalculator({ profile, district, location, txData, overridesMap, hideCost, locations }) {
+function BlendCalculator({ profile, district, location, txData, overridesMap, hideCost, locations, labelUrls, isAdmin, tillItBlendPrices, commodityFertilizerPrices, isManager, locationIds }) {
   const [fertProduct, setFertProduct] = useState("");
   const [customName, setCustomName] = useState("");
   const [weightPerGal, setWeightPerGal] = useState("");
@@ -1895,19 +2422,93 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const [activeVA, setActiveVA] = useState({});
   const [vaRates, setVaRates] = useState({});
   const [vaPrices, setVaPrices] = useState({});
+  const [vaPkgOverride, setVaPkgOverride] = useState({});
+
+  const onVaPkgChange = (matchName, pkg) => {
+    setVaPkgOverride(prev => ({ ...prev, [matchName]: pkg }));
+    // Floor/target belong to a different SKU now -- clear the old absolute
+    // sell-price slider position so it re-defaults to the new SKU's target
+    // rather than carrying over a value that may not even fall in range.
+    setVaPrices(prev => { const n = { ...prev }; delete n[matchName]; return n; });
+    Analytics.track("calc_va_package_changed", { product: matchName, pkg });
+  };
+  // Admins have no location/district of their own, so Value-Add pricing has
+  // nothing real to resolve against by default -- give them an explicit
+  // East/West toggle instead (same idea as ProfitSheet's district toggle).
+  // Everyone else pulls their own real district/location, no toggle shown.
+  const [adminDist, setAdminDist] = useState(district === "wtx" ? "wtx" : "etx");
+  const effectiveDistrict = isAdmin ? adminDist : (district === "wtx" ? "wtx" : "etx");
+  // Managers can oversee more than one location -- give them a picker among
+  // just their own locationIds (not the full admin 4-way picker) instead of
+  // silently always resolving against locationIds[0].
+  const myLocIds = locationIds || [];
+  const [managerLocOverride, setManagerLocOverride] = useState(null);
+  const activeLocation = isAdmin ? null : (isManager ? (managerLocOverride || myLocIds[0] || location) : location);
+  const effectiveLocation = isAdmin ? null : activeLocation;
+
+  // Till-It Blend pricing has 4 real buckets (Lonestar/Batesville/RGV each
+  // have their own real cost basis, "hereford_wtx" represents the whole West
+  // TX district) -- doesn't collapse into the wtx/etx toggle above. Admins
+  // get an explicit 4-way picker; everyone else (including managers, via
+  // their own location picker above) is auto-resolved from their real
+  // location name (falling back to hereford_wtx for any West TX location, or
+  // null -- no Till-It Blend pricing available yet -- for an East TX
+  // location that isn't specifically one of the 3 named ones).
+  const TILL_IT_BUCKET_LABELS = { lonestar: "Lonestar", batesville: "Batesville", rgv: "RGV", hereford_wtx: "West TX" };
+  const [tillItAdminBucket, setTillItAdminBucket] = useState("hereford_wtx");
+  const myLocationName = (activeLocation && locations.find(l => l.id === activeLocation)?.name || "").toLowerCase();
+  const autoTillItBucket = myLocationName === "lonestar" ? "lonestar"
+    : myLocationName === "batesville" ? "batesville"
+    : myLocationName === "rgv" ? "rgv"
+    : effectiveDistrict === "wtx" ? "hereford_wtx"
+    : null;
+  const tillItBucket = isAdmin ? tillItAdminBucket : autoTillItBucket;
+
+  const tillItOptions = useMemo(() => {
+    if (!tillItBucket) return [];
+    // Dry blends were added to till_it_blend_prices for the new TILL-IT
+    // BLENDS tab (2026-09-01), but this calculator is still gal-based only
+    // -- Nathan explicitly asked NOT to expose them here yet (a Dry-blend
+    // section for this calculator is planned separately, later). Excluding
+    // by category, not by unit/field presence, so this stays correct even
+    // if a future category is added here without anyone remembering to
+    // update this filter.
+    return (tillItBlendPrices || []).filter(r => r.location_bucket === tillItBucket && r.category !== "dry");
+  }, [tillItBlendPrices, tillItBucket]);
+
+  // Same bucket resolution powers plain commodity cost pre-fill (FertHub
+  // tracks 32% UAN / 10-34-0 / 11-37-0 / ATS / 4-11-11 -- not every commodity
+  // is tracked at every location, e.g. hereford_wtx runs 10-34-0 not
+  // 11-37-0, so a given commodity may simply have no row for this bucket).
+  const commodityPrices = useMemo(() => {
+    if (!tillItBucket) return {};
+    const map = {};
+    (commodityFertilizerPrices || []).filter(r => r.location_bucket === tillItBucket)
+      .forEach(r => { map[r.commodity_id] = r; });
+    return map;
+  }, [commodityFertilizerPrices, tillItBucket]);
 
   // Resolve value-add product pricing from txData using the same resolvePrice logic
   const vaProducts = useMemo(() => {
     return VA_PRODUCT_DEFS.map(def => {
       // Find matching SKUs in txData
       const matches = txData.filter(p => p.name === def.matchName);
-      // Prefer the bulk/270 GA SKU
-      let sku = matches.find(p => p.pkg && p.pkg.toUpperCase().indexOf(def.preferPkg) !== -1);
-      if (!sku) sku = matches.find(p => p.pkg && /270|250|275|BULK/i.test(p.pkg));
-      if (!sku && matches.length > 0) sku = matches[0];
+      if (matches.length === 0) return null;
+      // All package sizes this product actually exists in, for the picker.
+      const availablePkgs = matches.map(m => m.pkg).filter(Boolean);
+      // Nathan can pick a different package size than the default preferred
+      // one -- re-resolves cost/floor/target off that SKU instead (2026-09-01).
+      const chosenPkg = vaPkgOverride[def.matchName];
+      let sku = chosenPkg ? matches.find(p => p.pkg === chosenPkg) : null;
+      if (!sku) {
+        // Default preference: the bulk/preferPkg SKU.
+        sku = matches.find(p => p.pkg && p.pkg.toUpperCase().indexOf(def.preferPkg) !== -1);
+        if (!sku) sku = matches.find(p => p.pkg && /270|250|275|BULK/i.test(p.pkg));
+        if (!sku) sku = matches[0];
+      }
       if (!sku) return null;
 
-      const resolved = resolvePrice(sku, district, location, overridesMap);
+      const resolved = resolvePrice(sku, effectiveDistrict, effectiveLocation, overridesMap);
       const cost = sku.cost;
       const floor = resolved.floor;
       const target = resolved.target;
@@ -1917,19 +2518,77 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
       return {
         ...def,
         item: sku.item,
+        pkg: sku.pkg,
+        availablePkgs,
         cost: cost || 0,
         floor: floor || target,
         target: target || floor,
         sku
       };
     }).filter(Boolean);
-  }, [txData, district, location, overridesMap]);
+  }, [txData, effectiveDistrict, effectiveLocation, overridesMap, vaPkgOverride]);
+
+  // Currently-selected Till-It Blend, if any -- re-resolves automatically
+  // whenever the admin/manager bucket toggle changes too (fixes: picking a
+  // blend then toggling location used to keep showing the old bucket's
+  // price, since it was only ever pre-filled once at selection time).
+  const selectedTillIt = tillItOptions.find(r => r.blend_id === fertProduct) || null;
+  const [tillItMarginPct, setTillItMarginPct] = useState(null);
+  const tillItKey = selectedTillIt ? selectedTillIt.blend_id + ":" + selectedTillIt.location_bucket : null;
+
+  useEffect(() => {
+    if (selectedTillIt) {
+      setWeightPerGal(String(selectedTillIt.weight_per_gal));
+      setCostPerTon(selectedTillIt.cost_per_ton.toFixed(2));
+      // Floor margin comes straight from FertHub's current per-location
+      // margin -- user can only dial it UP from here to add profit.
+      setTillItMarginPct(+(selectedTillIt.margin * 100).toFixed(1));
+    }
+  }, [tillItKey]);
+
+  useEffect(() => {
+    if (selectedTillIt) {
+      const c = parseFloat(costPerTon) || 0;
+      const floorPct = selectedTillIt.margin * 100;
+      const m = tillItMarginPct != null ? Math.max(tillItMarginPct, floorPct) : floorPct;
+      const price = m < 100 ? c / (1 - m / 100) : c;
+      setSellPerTon(price.toFixed(2));
+    }
+  }, [selectedTillIt, costPerTon, tillItMarginPct]);
+
+  // Price per gallon, computed straight from FertHub's own real cost_per_gal
+  // (not derived from the $/ton fields above, so it matches FertHub's own
+  // per-gallon display exactly rather than picking up rounding drift from
+  // the ton conversion).
+  const tillItEffectiveMarginPct = selectedTillIt
+    ? Math.max(tillItMarginPct != null ? tillItMarginPct : selectedTillIt.margin * 100, selectedTillIt.margin * 100)
+    : null;
+  const tillItPricePerGal = selectedTillIt
+    ? selectedTillIt.cost_per_gal / (1 - tillItEffectiveMarginPct / 100)
+    : null;
+
+  // Plain commodities (32% UAN, 10-34-0, 11-37-0, ATS, 4-11-11) also pre-fill
+  // a real cost from FertHub when the bucket resolves one -- re-fills on
+  // bucket toggle too, same fix as the Till-It Blend reactivity above. Sell
+  // price stays fully manual for these (no margin concept from FertHub for
+  // a plain commodity -- Nathan sets his own sell price same as always).
+  const selectedCommodityPrice = (fertProduct && commodityPrices[fertProduct]) || null;
+  const commodityKey = selectedCommodityPrice ? fertProduct + ":" + selectedCommodityPrice.location_bucket : null;
+  useEffect(() => {
+    if (selectedCommodityPrice) setCostPerTon(selectedCommodityPrice.cost_per_ton.toFixed(2));
+  }, [commodityKey]);
 
   const onProductChange = (val) => {
     setFertProduct(val);
     if (val) Analytics.track("calc_commodity", { product: val });
-    if (val && val !== "custom" && COMMODITIES[val]) {
+    const tillIt = tillItOptions.find(r => r.blend_id === val);
+    if (tillIt) {
+      // Handled by the useEffect above (also covers subsequent bucket toggles).
+    } else if (val && val !== "custom" && COMMODITIES[val]) {
       setWeightPerGal(String(COMMODITIES[val].weight));
+      // Cost pre-fill (if this bucket has a real FertHub cost for it) is
+      // handled by the useEffect above.
+      if (!commodityPrices[val]) setCostPerTon("");
     } else if (val === "custom") {
       setWeightPerGal("");
     } else {
@@ -1972,6 +2631,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
       if (acresPerLoad > 0) {
         let qtsPerAcre = rate;
         if (p.rateUnit === "pt/ac") qtsPerAcre = rate / 2;
+        else if (p.rateUnit === "gal/ac") qtsPerAcre = rate * 4;
         const totalQts = acresPerLoad * qtsPerAcre;
         usageGal = totalQts / 4;
         profit = usageGal * profitPerGal;
@@ -1986,9 +2646,9 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const totalVAProfit = vaCalcs.filter(v => v.active).reduce((sum, v) => sum + v.profit, 0);
   const totalProfit = commodityProfit + totalVAProfit;
 
-  const profitColor = totalProfit >= 1000 ? S.green : totalProfit >= 700 ? S.amber : "#ef4444";
-  const profitGlow = totalProfit >= 1000 ? "rgba(76,175,106,.15)" : totalProfit >= 700 ? "rgba(232,162,48,.15)" : "rgba(239,68,68,.15)";
-  const profitStatus = totalProfit <= 0 ? "Enter cost & sell price above" : totalProfit < 700 ? "⚠️ Below minimum — add value products!" : totalProfit < 1000 ? "🟡 Getting there — push it higher!" : "✅ Strong profit per load!";
+  const profitColor = totalProfit >= 1000 ? S.green : "#ef4444";
+  const profitGlow = totalProfit >= 1000 ? "rgba(76,175,106,.15)" : "rgba(239,68,68,.15)";
+  const profitStatus = totalProfit <= 0 ? "Enter cost & sell price above" : totalProfit < 1000 ? "⚠️ Below $1,000 — add value products!" : "✅ Strong profit per load!";
   const barPct = Math.min(totalProfit / 1500 * 100, 100);
 
   const fmtD = (n) => n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1999,7 +2659,44 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const sectionHeaderStyle = { padding: "12px 14px", fontSize: 13, fontWeight: 700, display: "flex", alignItems: "center", gap: 8, borderBottom: "1px solid " + S.border };
 
   return (
-    <div style={{ padding: "10px 12px 100px" }}>
+    <div style={{ padding: "10px 12px 150px" }}>
+
+      {/* DISTRICT -- admins get a toggle (no district/location of their own to
+          resolve against); everyone else just sees their own district/location
+          confirmed, pulled from resolvePrice via effectiveDistrict/effectiveLocation. */}
+      {isAdmin ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+          <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>Value-Add Pricing</div>
+          <div style={{ display: "flex", gap: 6 }}>
+            {["wtx", "etx"].map(key => (
+              <button key={key} onClick={() => { setAdminDist(key); Analytics.track("calc_district_changed", { district: key }); }}
+                style={{ fontSize: 11, fontWeight: 700, color: adminDist === key ? S.onAccent : S.green, background: adminDist === key ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (adminDist === key ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
+                {key === "wtx" ? "West TX" : "East TX"}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : isManager && myLocIds.length > 1 ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10, flexWrap: "wrap" }}>
+          <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>Pricing For</div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {myLocIds.map(id => {
+              const name = locations.find(l => l.id === id)?.name || id;
+              const active = (managerLocOverride || myLocIds[0]) === id;
+              return (
+                <button key={id} onClick={() => { setManagerLocOverride(id); Analytics.track("calc_manager_location_changed", { location: id }); }}
+                  style={{ fontSize: 11, fontWeight: 700, color: active ? S.onAccent : S.green, background: active ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (active ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
+                  {name}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div style={{ fontSize: 10, color: S.muted, marginBottom: 10 }}>
+          Value-Add pricing: <span style={{ fontWeight: 700, color: S.text }}>{activeLocation ? (locations.find(l => l.id === activeLocation)?.name || (effectiveDistrict === "wtx" ? "West TX" : "East TX")) : (effectiveDistrict === "wtx" ? "West TX" : "East TX")}</span>
+        </div>
+      )}
 
       {/* COMMODITY */}
       <div style={sectionStyle}>
@@ -2010,8 +2707,30 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
             <select value={fertProduct} onChange={e => onProductChange(e.target.value)}
               style={{ ...inputStyle, WebkitAppearance: "none", paddingRight: 32, backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b8a6e'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center" }}>
               <option value="">— Select Product —</option>
-              {Object.entries(COMMODITIES).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
+              <optgroup label="Commodities">
+                {Object.entries(COMMODITIES).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
+              </optgroup>
+              {tillItOptions.length > 0 && (
+                <optgroup label={"Till-It Blends — " + TILL_IT_BUCKET_LABELS[tillItBucket] + " pricing"}>
+                  {tillItOptions.map(r => <option key={r.blend_id} value={r.blend_id}>{r.blend_name}{r.is_stale ? " (stale cost data)" : ""}</option>)}
+                </optgroup>
+              )}
             </select>
+            {isAdmin && (
+              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+                {Object.entries(TILL_IT_BUCKET_LABELS).map(([key, label]) => (
+                  <button key={key} onClick={() => setTillItAdminBucket(key)} type="button"
+                    style={{ fontSize: 10, fontWeight: 700, color: tillItAdminBucket === key ? S.onAccent : S.blue, background: tillItAdminBucket === key ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (tillItAdminBucket === key ? S.blue : "rgba(91,155,213,.3)"), padding: "4px 9px", borderRadius: 6, cursor: "pointer" }}>
+                    Till-It: {label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {!isAdmin && !tillItBucket && (
+              <div style={{ fontSize: 10, color: S.muted, marginTop: 6 }}>
+                Till-It Blend pricing isn't set up for your location yet — available at Lonestar, Batesville, RGV, and West TX so far.
+              </div>
+            )}
           </div>
 
           {fertProduct === "custom" && (
@@ -2026,16 +2745,57 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
             <input type="number" value={weightPerGal} onChange={e => setWeightPerGal(e.target.value)} step="0.01" placeholder="Auto-filled or enter manually" style={inputStyle} />
           </div>
 
-          <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Your Cost ($/ton)</label>
-              <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+          {selectedTillIt ? (
+            <div style={{ marginBottom: 12 }}>
+              {isAdmin && (
+                <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={labelStyle}>Cost ($/ton) — from FertHub</label>
+                    <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} step="0.01" style={inputStyle} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={labelStyle}>Sell Price ($/ton)</label>
+                    <div style={{ ...inputStyle, display: "flex", alignItems: "center", fontWeight: 700, color: S.green }}>
+                      ${parseFloat(sellPerTon || 0).toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              )}
+              <div style={{ marginBottom: 10 }}>
+                <label style={labelStyle}>Price ($/gal) — matches FertHub</label>
+                <div style={{ ...inputStyle, display: "flex", alignItems: "center", fontWeight: 800, fontSize: 20, color: S.green }}>
+                  ${tillItPricePerGal.toFixed(2)}
+                </div>
+              </div>
+              <label style={labelStyle}>
+                Margin % — floor {(selectedTillIt.margin * 100).toFixed(0)}% (FertHub, {TILL_IT_BUCKET_LABELS[selectedTillIt.location_bucket]}), toggle up for more profit
+              </label>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button type="button" onClick={() => setTillItMarginPct(prev => Math.max((prev != null ? prev : selectedTillIt.margin * 100) - 1, selectedTillIt.margin * 100))}
+                  style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid " + S.border, background: S.inputBg, color: S.text, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>−</button>
+                <input type="number" value={tillItMarginPct != null ? tillItMarginPct : (selectedTillIt.margin * 100).toFixed(1)}
+                  min={selectedTillIt.margin * 100} max="100" step="1"
+                  onChange={e => setTillItMarginPct(Math.max(parseFloat(e.target.value) || 0, selectedTillIt.margin * 100))}
+                  style={{ ...inputStyle, textAlign: "center", flex: 1 }} />
+                <button type="button" onClick={() => setTillItMarginPct(prev => Math.min((prev != null ? prev : selectedTillIt.margin * 100) + 1, 100))}
+                  style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid " + S.border, background: S.inputBg, color: S.text, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>+</button>
+              </div>
+              {selectedTillIt.is_stale && (
+                <div style={{ fontSize: 10, color: S.amber, marginTop: 6, fontWeight: 600 }}>⚠ This location's FertHub cost data was stale as of the last export -- confirm before quoting.</div>
+              )}
             </div>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle}>Sell Price ($/ton)</label>
-              <input type="number" value={sellPerTon} onChange={e => setSellPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+          ) : (
+            <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Your Cost ($/ton){selectedCommodityPrice ? " — from FertHub" : ""}</label>
+                <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={labelStyle}>Sell Price ($/ton)</label>
+                <input type="number" value={sellPerTon} onChange={e => setSellPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+              </div>
             </div>
-          </div>
+          )}
 
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <div style={{ flex: 1 }}>
@@ -2102,9 +2862,17 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                   <div style={{ width: 38, height: 21, borderRadius: 11, background: isActive ? S.green : S.border, position: "relative", flexShrink: 0, transition: "background .2s" }}>
                     <div style={{ width: 17, height: 17, borderRadius: "50%", background: "#fff", position: "absolute", top: 2, left: isActive ? 19 : 2, transition: "left .2s" }} />
                   </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{p.label}</div>
-                    <div style={{ fontSize: 10, color: S.muted }}>{p.cat} · {p.rateUnit}</div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{p.label}</div>
+                      {labelUrls && labelUrls[p.matchName] && (
+                        <a href={labelUrls[p.matchName]} target="_blank" rel="noopener noreferrer"
+                          onClick={e => { e.stopPropagation(); Analytics.track("calc_label_click", { product: p.matchName }); }}
+                          title="Open product label" style={{ fontSize: 11, color: S.blue, textDecoration: "none", lineHeight: 1 }}>📄</a>
+                      )}
+                    </div>
+                    <div style={{ fontSize: 10, color: S.muted }}>{p.cat}{p.pkg ? " · " + p.pkg : ""}</div>
+                    {p.labelRate && <div style={{ fontSize: 10, color: S.blue, fontWeight: 600, marginTop: 2, lineHeight: 1.3 }}>Label rate: {p.labelRate}</div>}
                   </div>
                   {isActive && calc && calc.profit > 0 && (
                     <div style={{ fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: calc.profit >= 100 ? "rgba(76,175,106,.12)" : "rgba(232,162,48,.12)", color: calc.profit >= 100 ? S.green : S.amber }}>
@@ -2115,6 +2883,16 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
 
                 {isActive && (
                   <div style={{ padding: "0 12px 12px", borderTop: "1px solid " + S.border, paddingTop: 10 }}>
+                    {p.availablePkgs && p.availablePkgs.length > 1 && (
+                      <div style={{ marginBottom: 10 }}>
+                        <label style={{ display: "block", fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Package Size</label>
+                        <select value={p.pkg} onClick={e => e.stopPropagation()}
+                          onChange={e => onVaPkgChange(p.matchName, e.target.value)}
+                          style={{ width: "100%", padding: "6px 10px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 13 }}>
+                          {p.availablePkgs.map(pkg => <option key={pkg} value={pkg}>{pkg}</option>)}
+                        </select>
+                      </div>
+                    )}
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
                       <span style={{ color: S.muted }}>Sell Price ($/gal)</span>
                       <span style={{ fontWeight: 700, color: sliderPct > 0.5 ? S.green : S.amber }}>${currentPrice.toFixed(2)}</span>
@@ -2156,16 +2934,16 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
         </div>
       </div>
 
-      {/* TOTAL PROFITABILITY METER */}
-      <div style={{ background: S.card, border: "1px solid " + profitColor + "60", borderRadius: 12, padding: "20px 16px", textAlign: "center", boxShadow: "0 0 30px " + profitGlow + ", inset 0 0 30px " + profitGlow, marginBottom: 10, backgroundImage: "linear-gradient(180deg, " + profitGlow + " 0%, " + S.card + " 100%)" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 6 }}>Total Profit Per Load</div>
-        <div style={{ fontSize: 40, fontWeight: 800, letterSpacing: -1, color: profitColor }}>${fmtD(totalProfit)}</div>
-        <div style={{ fontSize: 12, color: S.muted, marginTop: 4 }}>{profitStatus}</div>
-        <div style={{ height: 12, borderRadius: 6, background: S.inputBg, marginTop: 14, overflow: "hidden" }}>
-          <div style={{ height: "100%", borderRadius: 6, width: barPct + "%", background: profitColor, transition: "width .4s, background .3s", minWidth: totalProfit > 0 ? "4%" : "0%" }} />
-        </div>
-        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 9, color: S.muted }}>
-          <span>$0</span><span style={{ marginLeft: "25%" }}>$700</span><span style={{ marginLeft: "auto" }}>$1,000</span><span>$1,500+</span>
+      {/* TOTAL PROFITABILITY METER -- fixed to the bottom of the viewport
+          (2026-08-31, Nathan's request) so it stays visible while scrolling
+          through inputs above or the breakdown table below. The page
+          container's bottom padding (below) is sized to clear it. */}
+      <div style={{ position: "fixed", left: 0, right: 0, bottom: 0, zIndex: 500, background: S.card, borderTop: "1px solid " + profitColor + "60", padding: "14px 16px calc(14px + env(safe-area-inset-bottom, 0px))", textAlign: "center", boxShadow: "0 -8px 24px rgba(0,0,0,.25), inset 0 0 30px " + profitGlow, backgroundImage: "linear-gradient(0deg, " + profitGlow + " 0%, " + S.card + " 60%)" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 1, color: S.muted, marginBottom: 4 }}>Total Profit Per Load</div>
+        <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: -1, color: profitColor }}>${fmtD(totalProfit)}</div>
+        <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>{profitStatus}</div>
+        <div style={{ height: 8, borderRadius: 4, background: S.inputBg, marginTop: 8, overflow: "hidden" }}>
+          <div style={{ height: "100%", borderRadius: 4, width: barPct + "%", background: profitColor, transition: "width .4s, background .3s", minWidth: totalProfit > 0 ? "4%" : "0%" }} />
         </div>
       </div>
 
@@ -2223,7 +3001,7 @@ const SHEET_HEADERS = [
   { label: "", key: null },
 ];
 
-function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
+function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, canEdit, isAdmin, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
   const [dist, setDist] = useState(defaultDistrict === "wtx" ? "wtx" : "etx");
   const [tier, setTier] = useState("floor"); // wholesale | floor | target
   const [search, setSearch] = useState("");
@@ -2485,6 +3263,30 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     Analytics.track("category_changed", { item, newCat });
   }
 
+  // "Uncategorized" in My Sheet is a display-only fallback label (r.p.cat ||
+  // "Uncategorized"), not a real stored category -- a product lands there
+  // because it genuinely has no cat at all (common for a National-search
+  // item, whose master record was never assigned one). Assigns every item
+  // currently bucketed under Uncategorized to a real category in one shot,
+  // same underlying upsert as changeProductCategory, just batched.
+  // Returns an error message string on failure, undefined on success, so the
+  // caller (SheetGroupHeader's inline picker) can show the real reason right
+  // where the user is looking -- catError alone isn't good enough here, it
+  // only renders inside the Value Ladder card, nowhere near My Sheet, so a
+  // real failure here would have looked exactly like "nothing happened."
+  async function assignCategoryToItems(items, newCat) {
+    if (!newCat || !items.length) return;
+    setCatError("");
+    const payload = items.map(item => ({ sku_item: item, category: newCat, updated_at: new Date().toISOString() }));
+    const { error } = await supabaseClient.from("product_category_overrides").upsert(payload);
+    if (error) {
+      setCatError("Couldn't set category: " + error.message);
+      return error.message;
+    }
+    items.forEach(item => onCategoryChange && onCategoryChange(item, newCat));
+    Analytics.track("category_assigned_bulk", { count: items.length, newCat });
+  }
+
   async function renameCategoryEverywhere(oldCat, newCat) {
     if (!newCat.trim() || newCat === oldCat) return;
     setCatError("");
@@ -2519,6 +3321,21 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
 
   const sheetItemSet = useMemo(() => new Set(sheetItems.map(si => si.item)), [sheetItems]);
 
+  // A sheet item added from National search has no txData row at all (that's
+  // the whole point -- it's not in this district's price list). Every place
+  // that resolves a sheetItem back to its product record needs to also check
+  // National, or that item silently disappears from My Sheet (looks like
+  // "nothing happened" when you click it in the search results) even though
+  // it really did get added to sheetItems underneath.
+  const natAdaptedByItem = useMemo(() => {
+    const m = new Map();
+    (natData || []).forEach(p => m.set(p.item, adaptNational(p)));
+    return m;
+  }, [natData]);
+  function resolveProduct(item) {
+    return txData.find(x => x.item === item) || natAdaptedByItem.get(item);
+  }
+
   const searchResults = useMemo(() => {
     // Deliberately ignores catFilter -- typing a search should always search
     // every product, not just whichever category pill happens to be active.
@@ -2532,11 +3349,27 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     ).slice(0, 40);
   }, [search, catFilter, txData, sheetItemSet]);
 
+  // Search National Products -- for items that have no district (Wholesale/
+  // Floor/Target) pricing at all, like a product that's never been sold in
+  // this district but has a national list price. Only offers items NOT
+  // already present in txData (those are already reachable via the normal
+  // search -- no need for a second, redundant path to the same product).
+  const [searchNational, setSearchNational] = useState(false);
+  const txItemSet = useMemo(() => new Set(txData.map(p => p.item)), [txData]);
+  const nationalSearchResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    return (natData || []).filter(p =>
+      !sheetItemSet.has(p.item) && !txItemSet.has(p.item) &&
+      (p.name.toLowerCase().includes(q) || String(p.item).includes(q))
+    ).slice(0, 40);
+  }, [search, natData, sheetItemSet, txItemSet]);
+
   function addToSheet(p) {
     setSheetItems(prev => [...prev, { item: p.item, rate: p.rate_min || 1 }]);
     setSearch("");
     searchRef.current?.focus();
-    Analytics.track("sheet_add_product", { product: p.name, item: p.item });
+    Analytics.track("sheet_add_product", { product: p.name, item: p.item, national: !!p.isNationalOnly });
   }
   function removeFromSheet(item) {
     setSheetItems(prev => prev.filter(si => si.item !== item));
@@ -2590,6 +3423,17 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
       ? { ...si, cost: undefined, costDist: undefined }
       : si));
     Analytics.track("sheet_item_cost_reset", { item });
+  }
+  // A product added via National search (or any product whose master record
+  // is just missing rate data) has no p.rate_unit -- calcPPA can't produce
+  // Price/ac, Cost/ac, or Profit/ac without one, and there's no field for
+  // Rate/ac to even attach to. Rather than blocking on a database fix, let
+  // the rate unit be set locally on the sheet item itself, same pattern as
+  // the price/cost overrides -- it round-trips through saved_sheets.items
+  // for free. Once set, it's used everywhere p.rate_unit would have been.
+  function setSheetItemRateUnit(item, unit) {
+    setSheetItems(prev => prev.map(si => si.item === item ? { ...si, rateUnit: unit } : si));
+    Analytics.track("sheet_item_rate_unit_set", { item, unit });
   }
   function clearSheet() {
     setSheetItems([]);
@@ -2679,7 +3523,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   const allPriceEdits = useMemo(() => {
     const ladder = Object.entries(priceOverrides).map(([key, ov]) => ({ ...ov, key, source: "ladder" }));
     const sheet = sheetItems.filter(si => si.price != null && si.priceTier != null).map(si => {
-      const p = txData.find(x => x.item === si.item);
+      const p = resolveProduct(si.item);
       if (!p) return null;
       const raw = rawPriceFor(p, si.priceTier, si.priceDist);
       return {
@@ -2692,13 +3536,13 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
       };
     }).filter(Boolean);
     return [...ladder, ...sheet];
-  }, [priceOverrides, sheetItems, txData]);
+  }, [priceOverrides, sheetItems, txData, natAdaptedByItem]);
 
   // Same scoping rule as allPriceEdits: only the CURRENTLY LOADED sheet's own
   // cost edits, since sheetItems swaps out entirely on loadSheet.
   const sheetCostEdits = useMemo(() => {
     return sheetItems.filter(si => si.cost != null && si.costDist != null).map(si => {
-      const p = txData.find(x => x.item === si.item);
+      const p = resolveProduct(si.item);
       if (!p) return null;
       const landed = landedCosts[si.item]?.[si.costDist];
       return {
@@ -2708,7 +3552,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         hadLanded: !!landed,
       };
     }).filter(Boolean);
-  }, [sheetItems, txData, landedCosts]);
+  }, [sheetItems, txData, landedCosts, natAdaptedByItem]);
 
   function clearAllSheetCostEdits() {
     setSheetItems(prev => prev.map(si => ({ ...si, cost: undefined, costDist: undefined })));
@@ -2779,7 +3623,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
   }
 
   const rows = useMemo(() => sheetItems.map(si => {
-    const p = txData.find(x => x.item === si.item);
+    const p = resolveProduct(si.item);
     if (!p) return null;
     const { price, label, isEdited } = sheetItemPriceFor(si, p);
     const costIsEdited = si.cost != null && si.costDist === dist;
@@ -2790,6 +3634,10 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
     const costHigh = costIsEdited ? null : rawCost.high;
     const costNLots = costIsEdited ? null : rawCost.nLots;
     const rate = si.rate;
+    // Falls back to a rate unit set locally on this sheet item (see
+    // setSheetItemRateUnit) when the product's own record has none -- e.g.
+    // a National-search item whose master record was never given rate data.
+    const rateUnit = p.rate_unit || si.rateUnit;
     const isNTP = p.n_treatment === true || p.n_treatment === "true";
     let costAc, priceAc;
     if (isNTP) {
@@ -2801,16 +3649,16 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         costAc = cost != null ? calcNTreatPPA(cost, rate, uanGalRate) : null;
       }
     } else {
-      const canCalc = rate != null && p.rate_unit != null;
-      const ppaPrice = canCalc ? calcPPA(p.pkg, price, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
-      const ppaCost = canCalc ? calcPPA(p.pkg, cost, rate, p.rate_unit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+      const canCalc = rate != null && rateUnit != null;
+      const ppaPrice = canCalc ? calcPPA(p.pkg, price, rate, rateUnit, 10, p.dry_oz_price, p.oz_per_unit) : null;
+      const ppaCost = canCalc ? calcPPA(p.pkg, cost, rate, rateUnit, 10, p.dry_oz_price, p.oz_per_unit) : null;
       costAc = ppaCost ? ppaCost.val : null;
       priceAc = ppaPrice ? ppaPrice.val : null;
     }
     const profitAc = (costAc != null && priceAc != null) ? priceAc - costAc : null;
     const marginPct = (price != null && cost != null && price > 0) ? ((price - cost) / price) * 100 : null;
-    return { p, price, label, isEdited, rate, note: si.note || "", cost, costSource, costIsEdited, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct, isNTP };
-  }).filter(Boolean), [sheetItems, tier, dist, txData, overridesMap, landedCosts, nTreatBasis, uanGalRate, ureaLbsRate]);
+    return { p, price, label, isEdited, rate, rateUnit, note: si.note || "", cost, costSource, costIsEdited, costLow, costHigh, costNLots, costAc, priceAc, profitAc, marginPct, isNTP };
+  }).filter(Boolean), [sheetItems, tier, dist, txData, natAdaptedByItem, overridesMap, landedCosts, nTreatBasis, uanGalRate, ureaLbsRate]);
 
   const totalProfitAc = rows.reduce((s, r) => s + (r.profitAc || 0), 0);
   const groupedRows = useMemo(() => groupRowsByCategory(rows), [rows, catOrder]);
@@ -2825,7 +3673,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
           Product: r.p.name,
           Package: r.p.pkg || "",
           "Item #": r.p.item,
-          "Rate/ac": r.rate != null && r.p.rate_unit ? r.rate + " " + r.p.rate_unit : "",
+          "Rate/ac": r.rate != null && r.rateUnit ? r.rate + " " + r.rateUnit : "",
           Cost: r.cost != null ? Math.round(r.cost * 100) / 100 : "",
           Price: r.price != null ? Math.round(r.price * 100) / 100 : "",
           "Cost/ac": r.costAc != null ? Math.round(r.costAc * 100) / 100 : "",
@@ -2902,6 +3750,47 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         style={{ cursor: "pointer", borderBottom: "1px dashed " + S.blue, fontWeight: 700, color: S.blue }}>
         {value}{unit ? " " + unit : ""}
       </span>
+    );
+  }
+
+  // Shown in place of EditableRate when a sheet item has no rate unit at all
+  // (typically a National-search item with no rate data on file) -- lets
+  // Nathan define one right on the sheet, off the product label, instead of
+  // being stuck with a permanently blank Rate/ac. Presets cover the common
+  // shapes calcPPA already understands (see calcPPA's unit-string parsing);
+  // the free-text box covers anything else (any string containing "gal",
+  // "qt", "pt", "oz", or "lb", optionally with "/100" for a per-100-gal-
+  // carrier rate, works the same way every other product's rate_unit does).
+  const RATE_UNIT_PRESETS = ["gal/100gal", "qt/ac", "pt/ac", "oz/ac", "lb/ac"];
+  function SetRateUnit({ onSet }) {
+    const [open, setOpen] = useState(false);
+    const [custom, setCustom] = useState("");
+    if (!open) {
+      return (
+        <span onClick={() => setOpen(true)} title="This item has no rate unit on file -- set one from the label"
+          style={{ cursor: "pointer", fontSize: 10, color: S.amber, textDecoration: "underline" }}>
+          + Set rate unit
+        </span>
+      );
+    }
+    return (
+      <div style={{ background: S.card, border: "1px solid " + S.amber, borderRadius: 8, padding: 8, minWidth: 150, textAlign: "left" }}>
+        <div style={{ fontSize: 9, color: S.muted, marginBottom: 5 }}>Rate unit (from the label):</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+          {RATE_UNIT_PRESETS.map(u => (
+            <button key={u} onClick={() => onSet(u)}
+              style={{ fontSize: 10, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 4, padding: "2px 6px", cursor: "pointer" }}>{u}</button>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 4 }}>
+          <input type="text" value={custom} onChange={e => setCustom(e.target.value)} placeholder="or type e.g. qt/100gal"
+            onKeyDown={e => { if (e.key === "Enter" && custom.trim()) onSet(custom.trim()); }}
+            style={{ flex: 1, fontSize: 11, padding: "3px 5px", borderRadius: 4, border: "1px solid " + S.border, background: S.inputBg, color: S.text, outline: "none", width: 90 }} />
+          <button onClick={() => custom.trim() && onSet(custom.trim())} disabled={!custom.trim()}
+            style={{ fontSize: 10, color: S.onAccent, background: custom.trim() ? S.amber : S.tag, border: "none", borderRadius: 4, padding: "3px 8px", cursor: custom.trim() ? "pointer" : "not-allowed" }}>Set</button>
+        </div>
+        <div onClick={() => setOpen(false)} style={{ fontSize: 9, color: S.muted, marginTop: 5, cursor: "pointer", textAlign: "center" }}>cancel</div>
+      </div>
     );
   }
 
@@ -2990,7 +3879,11 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>District</div>
-            <div style={{ display: "flex", gap: 6 }}>{distBtn("wtx", "West TX")}{distBtn("etx", "East TX")}</div>
+            {isAdmin ? (
+              <div style={{ display: "flex", gap: 6 }}>{distBtn("wtx", "West TX")}{distBtn("etx", "East TX")}</div>
+            ) : (
+              <div style={{ fontSize: 12, fontWeight: 700, color: S.text, padding: "5px 0" }}>{dist === "wtx" ? "West TX" : "East TX"}</div>
+            )}
           </div>
           <div>
             <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>Price Tier</div>
@@ -3020,7 +3913,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                 🧾 Save Costs ({sheetCostEdits.length})
               </button>
             )}
-            {canEdit && <button onClick={() => setShowManageCats(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>🏷️ Categories</button>}
+            {isAdmin && <button onClick={() => setShowManageCats(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>🏷️ Categories</button>}
             <button onClick={() => { setShowLoadDialog(true); }} style={{ fontSize: 10, fontWeight: 700, color: S.text, background: S.tag, border: "1px solid " + S.border, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>📂 My Sheets{savedSheets.length > 0 ? " (" + savedSheets.length + ")" : ""}</button>
             <button onClick={() => { setSaveNameInput(currentSheetName || ""); setSaveError(""); setShowSaveDialog(true); }}
               disabled={!sheetItems.length}
@@ -3029,11 +3922,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         </div>
       </div>
 
-      <div style={{ position: "relative", marginBottom: 8 }}>
-        <input ref={searchRef} type="search" placeholder="Search product to add to sheet..." value={search} onChange={e => setSearch(e.target.value)}
-          style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 16, padding: "9px 36px 9px 12px", outline: "none", boxSizing: "border-box" }} />
+      <div style={{ position: "relative", marginBottom: 4 }}>
+        <input ref={searchRef} type="search" placeholder={searchNational ? "Search National Products..." : "Search product to add to sheet..."}
+          value={search} onChange={e => setSearch(e.target.value)}
+          style={{ width: "100%", background: S.inputBg, border: "1.5px solid " + (searchNational ? S.blue : S.border), borderRadius: 8, color: S.text, fontSize: 16, padding: "9px 36px 9px 12px", outline: "none", boxSizing: "border-box" }} />
         {search && <button onClick={() => { setSearch(""); searchRef.current?.focus(); }} style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: S.muted, fontSize: 16, cursor: "pointer" }}>✕</button>}
-        {searchResults.length > 0 && (
+        {!searchNational && searchResults.length > 0 && (
           <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50, background: S.card, border: "1px solid " + S.border, borderRadius: 8, maxHeight: 320, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}>
             {searchResults.map(p => (
               <div key={p.item} onClick={() => addToSheet(p)}
@@ -3047,6 +3941,33 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
             ))}
           </div>
         )}
+        {searchNational && search.trim() && (
+          <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 50, background: S.card, border: "1px solid " + S.blue, borderRadius: 8, maxHeight: 320, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}>
+            {nationalSearchResults.length === 0 && (
+              <div style={{ padding: "12px", fontSize: 12, color: S.muted, textAlign: "center" }}>No national products match "{search}"</div>
+            )}
+            {nationalSearchResults.map(p => (
+              <div key={p.item} onClick={() => addToSheet(adaptNational(p))}
+                style={{ padding: "9px 12px", cursor: "pointer", borderBottom: "1px solid " + S.border, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: S.text, display: "flex", alignItems: "center", gap: 6 }}>
+                    {p.name}
+                    <span style={{ fontSize: 9, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", padding: "1px 5px", borderRadius: 4 }}>NATIONAL</span>
+                  </div>
+                  <div style={{ fontSize: 10, color: S.muted }}>{p.pkg ? p.pkg + " · " : ""}#{p.item} · Nat. Target {fmt(p.nat_target)}</div>
+                </div>
+                <span style={{ fontSize: 16, color: S.blue }}>+</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <button onClick={() => setSearchNational(v => !v)}
+          style={{ fontSize: 10, fontWeight: 700, color: searchNational ? S.onAccent : S.blue, background: searchNational ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (searchNational ? S.blue : "rgba(91,155,213,.3)"), padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+          🌎 {searchNational ? "Searching National" : "Search National Products"}
+        </button>
+        {searchNational && <span style={{ fontSize: 10, color: S.muted }}>Only for items not already in your district's price list. No Wholesale/Floor price -- shows National Target ("(Nat)") instead.</span>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
         <button onClick={() => pillRowRef.current?.scrollBy({ left: -220, behavior: "smooth" })}
@@ -3055,12 +3976,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
           style={{ display: "flex", gap: 5, overflowX: "auto", scrollbarWidth: "none", scrollBehavior: "smooth" }}>
           {cats.map(c => (
             <button key={c} onClick={() => { setCatFilter(c); setSearch(""); }}
-              draggable={canEdit && c !== "ALL"}
+              draggable={isAdmin && c !== "ALL"}
               onDragStart={e => { setDragCat(c); e.dataTransfer.effectAllowed = "move"; }}
               onDragOver={e => { if (c !== "ALL") { e.preventDefault(); if (dragOverCat !== c) setDragOverCat(c); } }}
               onDrop={e => { e.preventDefault(); reorderCategory(dragCat, c); setDragCat(null); setDragOverCat(null); }}
               onDragEnd={() => { setDragCat(null); setDragOverCat(null); }}
-              style={{ fontSize: 10, background: c === catFilter ? S.greenDim : S.tag, border: "1px solid " + (dragOverCat === c && dragCat !== c ? S.blue : c === catFilter ? S.green : S.border), color: c === catFilter ? "#fff" : S.muted, borderRadius: 20, padding: "5px 11px", whiteSpace: "nowrap", cursor: canEdit && c !== "ALL" ? "grab" : "pointer", letterSpacing: .5, textTransform: "uppercase", flexShrink: 0, opacity: dragCat === c ? .4 : 1 }}>
+              style={{ fontSize: 10, background: c === catFilter ? S.greenDim : S.tag, border: "1px solid " + (dragOverCat === c && dragCat !== c ? S.blue : c === catFilter ? S.green : S.border), color: c === catFilter ? "#fff" : S.muted, borderRadius: 20, padding: "5px 11px", whiteSpace: "nowrap", cursor: isAdmin && c !== "ALL" ? "grab" : "pointer", letterSpacing: .5, textTransform: "uppercase", flexShrink: 0, opacity: dragCat === c ? .4 : 1 }}>
               {c === "ALL" ? "All" : c}{c !== "ALL" && catCounts[c] ? " (" + catCounts[c] + ")" : ""}
             </button>
           ))}
@@ -3068,8 +3989,8 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
         <button onClick={() => pillRowRef.current?.scrollBy({ left: 220, behavior: "smooth" })}
           style={{ flexShrink: 0, fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, borderRadius: 6, width: 24, height: 24, cursor: "pointer", lineHeight: 1 }}>›</button>
       </div>
-      {canEdit && <div style={{ fontSize: 9, color: S.muted, marginBottom: 12 }}>Scroll with the arrows, or drag a category to reorder.</div>}
-      {!canEdit && <div style={{ marginBottom: 12 }} />}
+      {isAdmin && <div style={{ fontSize: 9, color: S.muted, marginBottom: 12 }}>Scroll with the arrows, or drag a category to reorder.</div>}
+      {!isAdmin && <div style={{ marginBottom: 12 }} />}
 
       {catFilter !== "ALL" && !search && (
         <div style={{ marginBottom: 20, background: "rgba(91,155,213,.06)", border: "1px solid rgba(91,155,213,.28)", borderRadius: 12, padding: 14 }}>
@@ -3096,7 +4017,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                         <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{r.p.name}</div>
                         <div style={{ fontSize: 10, color: S.muted, display: "flex", alignItems: "center", gap: 5 }}>
                           {r.p.pkg ? r.p.pkg + " · " : ""}#{r.p.item}
-                          {canEdit && (editingCatItem === r.p.item ? (
+                          {isAdmin && (editingCatItem === r.p.item ? (
                             <select autoFocus defaultValue={r.p.cat} onBlur={() => setEditingCatItem(null)}
                               onChange={e => changeProductCategory(r.p.item, e.target.value)}
                               style={{ fontSize: 9, background: S.inputBg, color: S.text, border: "1px solid " + S.blue, borderRadius: 4 }}>
@@ -3113,8 +4034,12 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                         <div style={{ fontSize: 9, color: r.costSource === "Landed" ? S.blue : S.muted }} title={r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>{r.costSource}</div>
                       </td>
                       <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                        <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setPriceOverride(r.p, v)} />
-                        <div style={{ fontSize: 9, color: S.muted }}>{r.label}</div>
+                        <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setPriceOverride(r.p, v)}
+                          title={r.isEdited ? "Personal to this sheet only -- won't change pricing for anyone else" : "Click to try a different price"} />
+                        <div style={{ fontSize: 9, color: S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
+                          {r.label}
+                          {r.isEdited && <span style={{ fontStyle: "italic" }}>🔒 yours only</span>}
+                        </div>
                       </td>
                       <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", color: S.text }}>{r.priceAc != null ? fmtAc(r.priceAc) : "—"}</td>
                       <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60", fontWeight: 800, color: r.profitAc == null ? S.muted : r.profitAc >= 0 ? S.green : "#ef4444" }}>{r.profitAc != null ? fmtAc(r.profitAc) : "—"}</td>
@@ -3180,7 +4105,10 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                     <SheetGroupHeader cat={group.cat} count={group.items.length} colSpan={11}
                       color={colorForCategory(group.cat)} textColor={contrastTextFor(colorForCategory(group.cat))}
                       onRename={renameCategoryEverywhere}
-                      canDrag={canEdit}
+                      allCats={cats.filter(c => c !== "ALL")}
+                      onAssignCategory={newCat => assignCategoryToItems(group.items.map(r => r.p.item), newCat)}
+                      canDrag={isAdmin}
+                      isAdmin={isAdmin}
                       isDragging={dragCat === group.cat}
                       isDragOver={dragOverCat === group.cat && dragCat !== group.cat}
                       onHandleDragStart={e => { setDragCat(group.cat); e.dataTransfer.effectAllowed = "move"; }}
@@ -3238,29 +4166,38 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                           <div style={{ fontSize: 10, color: S.muted }}>{r.p.pkg ? r.p.pkg + " · " : ""}#{r.p.item}</div>
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                          {r.p.rate_unit ? <EditableRate value={r.rate} unit={r.p.rate_unit} onChange={v => updateRate(r.p.item, v)} /> : <span style={{ color: S.muted }}>—</span>}
+                          {r.rateUnit
+                            ? <EditableRate value={r.rate} unit={r.rateUnit} onChange={v => updateRate(r.p.item, v)} />
+                            : <SetRateUnit onSet={u => setSheetItemRateUnit(r.p.item, u)} />}
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
                           {canEdit
                             ? <EditablePrice value={r.cost} isEdited={r.costIsEdited} onChange={v => setSheetItemCost(r.p, v)}
-                                title="Click to enter the actual landed cost" />
+                                title="Click to enter the actual landed cost -- yours only, doesn't touch landed_costs for anyone else" />
                             : <div style={{ color: S.text }}>{fmt(r.cost)}</div>}
                           <div style={{ fontSize: 9, color: r.costIsEdited ? S.amber : r.costSource === "Landed" ? S.blue : S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}
                             title={r.costIsEdited ? "Manually entered — not yet saved to landed_costs" : r.costSource === "Landed" ? `${r.costNLots} lot${r.costNLots===1?"":"s"} · range ${fmt(r.costLow)}–${fmt(r.costHigh)}` : "No landed cost data for this district"}>
                             {r.costSource}
                             {r.costIsEdited && (
-                              <span onClick={() => clearSheetItemCost(r.p.item)} title="Reset to Landed/Mfg cost"
-                                style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                              <React.Fragment>
+                                <span style={{ color: S.muted, fontStyle: "italic" }}>🔒 yours only</span>
+                                <span onClick={() => clearSheetItemCost(r.p.item)} title="Reset to Landed/Mfg cost"
+                                  style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                              </React.Fragment>
                             )}
                           </div>
                         </td>
                         <td style={{ padding: "8px", textAlign: "right", borderBottom: "1px solid " + S.border + "60" }}>
-                          <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setSheetItemPrice(r.p, v)} />
+                          <EditablePrice value={r.price} isEdited={r.isEdited} onChange={v => setSheetItemPrice(r.p, v)}
+                            title={r.isEdited ? "Personal to this sheet only -- won't change pricing for anyone else" : "Click to try a different price"} />
                           <div style={{ fontSize: 9, color: S.muted, display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 4 }}>
                             {r.label}
                             {r.isEdited && (
-                              <span onClick={() => clearSheetItemPrice(r.p.item)} title="Reset to list price"
-                                style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                              <React.Fragment>
+                                <span style={{ color: S.muted, fontStyle: "italic" }}>🔒 yours only</span>
+                                <span onClick={() => clearSheetItemPrice(r.p.item)} title="Reset to list price"
+                                  style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
+                              </React.Fragment>
                             )}
                           </div>
                         </td>
@@ -3586,7 +4523,7 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
                   {group.items.map(r => (
                     <tr key={r.p.item} style={printColors ? { background: catRowBg(r.p.cat) } : undefined}>
                       <td style={{ fontWeight: 600, color: "#111" }}>{r.p.name}{r.p.pkg ? <span style={{ fontWeight: 400, color: "#777" }}>{" (" + r.p.pkg + ")"}</span> : ""}</td>
-                      {printCols.rate && <td className="num" style={{ color: S.blue, fontWeight: 700 }}>{r.p.rate_unit ? r.rate + " " + r.p.rate_unit : "—"}</td>}
+                      {printCols.rate && <td className="num" style={{ color: S.blue, fontWeight: 700 }}>{r.rate != null && r.rateUnit ? r.rate + " " + r.rateUnit : "—"}</td>}
                       {printCols.cost && <td className="num">
                         <div style={{ color: "#333" }}>{fmt(r.cost)}</div>
                         <div style={{ fontSize: 9, color: "#888", fontWeight: 400 }}>{r.costSource}</div>
@@ -3617,16 +4554,36 @@ function ProfitSheet({ defaultDistrict, txData, overridesMap, session, canEdit, 
 // click the label to rename the category (same renameCategoryEverywhere used
 // in Manage Categories, just editable inline here too since that's the more
 // natural place to fix a label while you're staring at a specific sheet).
-function SheetGroupHeader({ cat, count, color, textColor, colSpan, onRename, canDrag, isDragging, isDragOver, onHandleDragStart, onHandleDragEnd, onRowDragOver, onRowDrop }) {
+//
+// "Uncategorized" is a display-only fallback (groupRowsByCategory's
+// `r.p.cat || "Uncategorized"`), not a real stored category -- no product
+// actually has cat === "Uncategorized", so the normal rename flow would
+// silently do nothing for this bucket (renameCategoryEverywhere looks up
+// products BY that exact cat string). It gets a different click behavior
+// instead: a dropdown of REAL categories that assigns every item currently
+// sitting in this bucket to whichever one you pick (assignCategoryToItems).
+function SheetGroupHeader({ cat, count, color, textColor, colSpan, onRename, allCats, onAssignCategory, canDrag, isAdmin, isDragging, isDragOver, onHandleDragStart, onHandleDragEnd, onRowDragOver, onRowDrop }) {
+  const isUncat = cat === "Uncategorized";
   const [editing, setEditing] = useState(false);
   const [val, setVal] = useState(cat);
   const [saving, setSaving] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const [pickErr, setPickErr] = useState("");
   async function commit() {
     if (!val.trim() || val.trim() === cat) { setEditing(false); return; }
     setSaving(true);
     await onRename(cat, val.trim());
     setSaving(false);
     setEditing(false);
+  }
+  async function commitAssign(newCat) {
+    if (!newCat) { setPicking(false); return; }
+    setSaving(true);
+    setPickErr("");
+    const err = await onAssignCategory(newCat);
+    setSaving(false);
+    if (err) { setPickErr(err); return; } // keep the picker open so the error is visible
+    setPicking(false);
   }
   return (
     <tr onDragOver={onRowDragOver} onDrop={onRowDrop}
@@ -3640,6 +4597,29 @@ function SheetGroupHeader({ cat, count, color, textColor, colSpan, onRename, can
             <button onClick={commit} disabled={saving} style={{ fontSize: 10, fontWeight: 700, color: color, background: textColor, border: "none", borderRadius: 5, padding: "3px 8px", cursor: "pointer" }}>{saving ? "..." : "Save"}</button>
             <button onClick={() => { setVal(cat); setEditing(false); }} style={{ fontSize: 10, color: textColor, background: "none", border: "none", cursor: "pointer", opacity: .8 }}>Cancel</button>
           </div>
+        ) : picking ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }} onClick={e => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {/* No onBlur-driven close here (unlike a typical dropdown) --
+                  a stray blur while commitAssign is mid-flight, or right after
+                  it surfaces an error, would silently close this and hide the
+                  error message. Cancel button + a successful pick are the
+                  only ways this closes, matching the rename input above,
+                  which also has no onBlur close. */}
+              <select autoFocus defaultValue="" disabled={saving}
+                onChange={e => commitAssign(e.target.value)}
+                style={{ fontSize: 11, fontWeight: 700, background: "rgba(255,255,255,.15)", color: textColor, border: "1px solid " + textColor, borderRadius: 5, padding: "3px 7px", outline: "none" }}>
+                <option value="" disabled>{saving ? "Saving..." : "Choose a category..."}</option>
+                {(allCats || []).map(c => <option key={c} value={c} style={{ color: "#000" }}>{c}</option>)}
+              </select>
+              <button onClick={() => { setPicking(false); setPickErr(""); }} style={{ fontSize: 10, color: textColor, background: "none", border: "none", cursor: "pointer", opacity: .8 }}>Cancel</button>
+            </div>
+            {pickErr && (
+              <div style={{ fontSize: 10, color: "#fff", background: "#c0392b", border: "1px solid #922b21", borderRadius: 5, padding: "3px 8px", fontWeight: 600 }}>
+                ⚠ {pickErr}
+              </div>
+            )}
+          </div>
         ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
             {canDrag && (
@@ -3647,11 +4627,12 @@ function SheetGroupHeader({ cat, count, color, textColor, colSpan, onRename, can
                 style={{ cursor: "grab", color: textColor, opacity: .75, fontSize: 14, userSelect: "none", touchAction: "none" }}
                 title="Drag to reorder this product group">⠿</span>
             )}
-            <div onClick={() => setEditing(true)} title="Click to rename this category"
-              style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer" }}>
+            <div onClick={() => { if (isAdmin) isUncat ? setPicking(true) : setEditing(true); }}
+              title={isAdmin ? (isUncat ? "Click to assign a category to everything below" : "Click to rename this category") : undefined}
+              style={{ display: "flex", alignItems: "center", gap: 7, cursor: isAdmin ? "pointer" : "default" }}>
               <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: .5, textTransform: "uppercase", color: textColor }}>{cat}</span>
               <span style={{ fontSize: 9, fontWeight: 600, color: textColor, opacity: .75 }}>{count} product{count === 1 ? "" : "s"}</span>
-              <span style={{ fontSize: 10, color: textColor, opacity: .6 }}>✎</span>
+              <span style={{ fontSize: 10, color: textColor, opacity: .6 }}>{isUncat ? "▾ choose category" : "✎"}</span>
             </div>
           </div>
         )}
@@ -3721,6 +4702,9 @@ function App() {
   const [organicNames, setOrganicNames] = useState(new Set());
   const [productInfo, setProductInfo] = useState({});
   const [labelUrls, setLabelUrls] = useState({});
+  const [tillItBlendPrices, setTillItBlendPrices] = useState([]);
+  const [commodityFertilizerPrices, setCommodityFertilizerPrices] = useState([]);
+  const [accessRequests, setAccessRequests] = useState([]);
 
   const [search, setSearch] = useState("");
   const [view, setView] = useState("tx");
@@ -3784,7 +4768,10 @@ function App() {
         setTxData((tx || []).map(p => catOverrideMap[p.item] ? { ...p, cat: catOverrideMap[p.item] } : p));
 
         const { data: nat } = await supabaseClient.from("national_prices").select("*").order("name");
-        setNatData(nat || []);
+        // Same override merge as txData just above -- a category assigned to
+        // a National-only product (see My Sheet's "Uncategorized" picker)
+        // needs to survive a page reload too, not just the current session.
+        setNatData((nat || []).map(p => catOverrideMap[p.item] ? { ...p, cat: catOverrideMap[p.item] } : p));
 
         const { data: landed } = await supabaseClient.from("landed_costs").select("*");
         const landedMap = {};
@@ -3817,8 +4804,19 @@ function App() {
         (lu || []).forEach(l => { luMap[l.name] = l.url; });
         setLabelUrls(luMap);
 
+        const { data: tib } = await supabaseClient.from("till_it_blend_prices").select("*");
+        setTillItBlendPrices(tib || []);
+
+        const { data: cfp } = await supabaseClient.from("commodity_fertilizer_prices").select("*");
+        setCommodityFertilizerPrices(cfp || []);
+
         const { data: favRows } = await supabaseClient.from("user_favorites").select("sku_item").eq("user_id", session.user.id);
         setFavorites(new Set((favRows || []).map(r => r.sku_item)));
+
+        if (prof?.role === "admin") {
+          const { data: reqs } = await supabaseClient.from("access_requests").select("*").order("requested_at", { ascending: false });
+          setAccessRequests(reqs || []);
+        }
 
         setView(prof?.role === "admin" || prof?.role === "viewer_admin" ? "tx" : "district");
       } catch (err) {
@@ -3846,6 +4844,11 @@ function App() {
     await supabaseClient.auth.signOut();
     setSession(null); setProfile(null);
     setSearch(""); setCatFilter("ALL"); setView("tx");
+  }, []);
+
+  const refreshAccessRequests = useCallback(async () => {
+    const { data: reqs } = await supabaseClient.from("access_requests").select("*").order("requested_at", { ascending: false });
+    setAccessRequests(reqs || []);
   }, []);
 
   const txCats = useMemo(() => {
@@ -3955,11 +4958,13 @@ function App() {
   const districtLabel = isManager ? (dist === "wtx" ? "West TX Manager" : "East TX Manager") : loc ? (locations.find(l => l.id === loc)?.name || dist) : dist === "wtx" ? "West Texas" : "East Texas";
 
   const tabs = isAdmin ? [
-    { key: "tx", label: "TX Products" }, { key: "nat", label: "National Ref" },
+    { key: "tx", label: "TX Products" }, { key: "tillit", label: "TILL-IT BLENDS", color: S.amber },
+    { key: "nat", label: "National Ref" },
     { key: "all", label: "All" }, { key: "organic", label: "◆ Organic", color: "#4ade80" },
     { key: "favorites", label: "⭐ Favorites", color: "#f59e0b" },
   ] : [
-    { key: "district", label: districtLabel + " Products" }, { key: "national", label: "National Ref" },
+    { key: "district", label: districtLabel + " Products" }, { key: "tillit", label: "TILL-IT BLENDS", color: S.amber },
+    { key: "national", label: "National Ref" },
     { key: "organic", label: "◆ Organic", color: "#4ade80" },
     { key: "favorites", label: "⭐ Favorites", color: "#f59e0b" },
   ];
@@ -3987,7 +4992,10 @@ function App() {
   let countText = "";
 
   if (isAdmin) {
-    if (view === "tx") {
+    if (view === "tillit") {
+      countText = "Real cost/floor pricing pulled from FertHub";
+      content = <TillItBlendsView tillItBlendPrices={tillItBlendPrices} isAdmin={isAdmin} isManager={isManager} profile={profile} locations={locations} labelUrls={labelUrls} hideCost={hideCost} />;
+    } else if (view === "tx") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
       content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} isAdmin={true} hideCost={hideCost} {...cardProps} />));
@@ -4022,7 +5030,10 @@ function App() {
         : <div style={{ textAlign: "center", padding: "60px 20px", color: S.muted }}><div style={{ fontSize: 36, marginBottom: 12 }}>⭐</div><div style={{ fontSize: 14, fontWeight: 600, marginBottom: 6 }}>No favorites yet</div><div style={{ fontSize: 12 }}>Tap the star on any product card to save it here</div></div>;
     }
   } else {
-    if (view === "district") {
+    if (view === "tillit") {
+      countText = "Real cost/floor pricing pulled from FertHub";
+      content = <TillItBlendsView tillItBlendPrices={tillItBlendPrices} isAdmin={isAdmin} isManager={isManager} profile={profile} locations={locations} labelUrls={labelUrls} hideCost={hideCost} />;
+    } else if (view === "district") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
       content = groups.map(([n, items]) => items.map(p => <ProductCard key={p.item} p={p} district={dist} location={loc} isManager={isManager} locationIds={locIds} {...cardProps} />));
@@ -4058,6 +5069,18 @@ function App() {
             <div style={{ fontSize: 10, color: S.muted, letterSpacing: 2, textTransform: "uppercase", marginTop: 1 }}>2026 TX Branded · Wilbur-Ellis{isAdmin ? "" : " · " + districtLabel}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {profile.role === "admin" && (
+              <button onClick={() => { setAppMode(appMode === "access" ? "prices" : "access"); }}
+                title="Access Requests"
+                style={{ position: "relative", fontSize: 10, fontWeight: 700, color: appMode === "access" ? S.onAccent : S.amber, background: appMode === "access" ? S.amber : "rgba(232,162,48,.1)", border: "1px solid " + (appMode === "access" ? S.amber : "rgba(232,162,48,.3)"), padding: "4px 8px", borderRadius: 6, cursor: "pointer", letterSpacing: .5 }}>
+                🔔
+                {accessRequests.filter(r => r.status === "pending").length > 0 && (
+                  <span style={{ position: "absolute", top: -5, right: -5, fontSize: 9, fontWeight: 800, color: "#fff", background: "#ef4444", borderRadius: 10, padding: "1px 5px", lineHeight: 1.4 }}>
+                    {accessRequests.filter(r => r.status === "pending").length}
+                  </span>
+                )}
+              </button>
+            )}
             {profile.role === "admin" && (
               <button onClick={() => { setAppMode(appMode === "analytics" ? "prices" : "analytics"); }}
                 style={{ fontSize: 10, fontWeight: 700, color: appMode === "analytics" ? S.onAccent : S.purple, background: appMode === "analytics" ? S.purple : "rgba(176,125,232,.1)", border: "1px solid " + (appMode === "analytics" ? S.purple : "rgba(176,125,232,.3)"), padding: "4px 8px", borderRadius: 6, cursor: "pointer", letterSpacing: .5 }}>
@@ -4100,7 +5123,7 @@ function App() {
         </React.Fragment>)}
       </header>
 
-      {appMode === "prices" && !(isAdmin && view === "all") && (
+      {appMode === "prices" && !(isAdmin && view === "all") && view !== "tillit" && (
         <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "8px 14px 2px", scrollbarWidth: "none" }}>
           {pills.map(c => (
             <button key={c} onClick={() => setCatFilter(c)}
@@ -4119,19 +5142,33 @@ function App() {
       )}
 
       {appMode === "calc" && (
-        <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} />
+        <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} labelUrls={labelUrls} isAdmin={isAdmin} tillItBlendPrices={tillItBlendPrices} commodityFertilizerPrices={commodityFertilizerPrices} isManager={isManager} locationIds={locIds} />
       )}
 
       {canUseSheet && (
         <div style={{ display: appMode === "sheet" ? "block" : "none" }}>
-          <ProfitSheet defaultDistrict={dist} txData={txData} overridesMap={overridesMap} session={session} canEdit={canUseSheet} landedCosts={landedCosts} labelUrls={labelUrls}
-            onCategoryChange={(item, newCat) => setTxData(prev => prev.map(p => p.item === item ? { ...p, cat: newCat } : p))}
-            onBulkCategoryChange={(oldCat, newCat) => setTxData(prev => prev.map(p => p.cat === oldCat ? { ...p, cat: newCat } : p))} />
+          <ProfitSheet defaultDistrict={dist} txData={txData} natData={natData} overridesMap={overridesMap} session={session} canEdit={canUseSheet} isAdmin={isAdmin} landedCosts={landedCosts} labelUrls={labelUrls}
+            onCategoryChange={(item, newCat) => {
+              // A recategorized product might be sourced from either list --
+              // e.g. a National-search item added to a sheet lives in natData,
+              // not txData -- so both need patching for the change to
+              // actually show up wherever that item is currently rendered.
+              setTxData(prev => prev.map(p => p.item === item ? { ...p, cat: newCat } : p));
+              setNatData(prev => prev.map(p => p.item === item ? { ...p, cat: newCat } : p));
+            }}
+            onBulkCategoryChange={(oldCat, newCat) => {
+              setTxData(prev => prev.map(p => p.cat === oldCat ? { ...p, cat: newCat } : p));
+              setNatData(prev => prev.map(p => p.cat === oldCat ? { ...p, cat: newCat } : p));
+            }} />
         </div>
       )}
 
       {appMode === "analytics" && (
         <AnalyticsDashboard />
+      )}
+
+      {appMode === "access" && isAdmin && (
+        <AccessRequestsPanel requests={accessRequests} onRefresh={refreshAccessRequests} />
       )}
     </div>
   );
