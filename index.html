@@ -1232,7 +1232,9 @@ function locationNameToBucket(name, dist) {
   const n = (name || "").toLowerCase();
   if (n === "lonestar") return "lonestar";
   if (n === "batesville") return "batesville";
-  if (n === "rgv") return "rgv";
+  // Edinburg and Rio Hondo share RGV's real Till-It cost/pricing in FertHub
+  // (Nathan, 2026-09-02) -- not their own separate bucket.
+  if (n === "rgv" || n === "edinburg" || n === "rio hondo") return "rgv";
   return dist === "wtx" ? "hereford_wtx" : null;
 }
 
@@ -2483,23 +2485,23 @@ const VA_PRODUCT_DEFS = [
     labelRate: "Field/Row: 0.5–5 gal/ac foliar or fertigation · 1–12 qt/ac in-furrow at planting" },
   { matchName: "FOLI-GRO MEGAWATT 4-11-13", label: "FOLI-GRO MEGAWATT",   cat: "Foliar / Starter",     rateUnit: "gal/ac", rateMin: 1, rateMax: 5, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
     labelRate: "Soil in-furrow/broadcast/fertigation: 1–5 gal/ac · Field/Row foliar: 1–3 gal/ac" },
-  { matchName: "NDURE 2.0",              label: "NDURE 2.0",              cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 1, rateMax: 2, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA",
+  { matchName: "NDURE 2.0",              label: "NDURE 2.0",              cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: true, preferPkg: "270 GA",
     labelRate: "Urea: 2 qt/ton (fixed) · UAN: 1 qt/ton (fixed)" },
   { matchName: "NDURE DCD 25",           label: "NDURE DCD 25",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "250 GA",
     labelRate: "UAN: 2–6 qt/ton · Anhydrous: 6–8 qt/ton · Aqua Ammonia: 4 qt/ton (fixed)" },
-  { matchName: "NDURE TRIPLE",           label: "NDURE TRIPLE",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 3, rateMax: 6, defaultRate: 3, isNTreatment: true, preferPkg: "270 GA",
-    labelRate: "UAN: 3–6 qt/ton · Urea: 3–4 qt/ton" },
+  { matchName: "NDURE TRIPLE",           label: "NDURE TRIPLE",           cat: "Nitrogen Stabilizer", rateUnit: "qt/ton", rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: true, preferPkg: "270 GA",
+    labelRate: "UAN: 2–6 qt/ton · Urea: 3–4 qt/ton" },
   { matchName: "NUTRIO N-TUNE",          label: "NUTRIO N-TUNE",          cat: "N-Fixing Biological",  rateUnit: "qt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
     labelRate: "Starter/fertigation/post-emerge: 1–2 qt/ac · Broadcast: up to 3 qt/ac" },
-  { matchName: "NUTRIO UNLOCK",          label: "NUTRIO UNLOCK",          cat: "Fertilizer Treatment", rateUnit: "qt/ac",  rateMin: 2, rateMax: 4, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA",
-    labelRate: "Broadcast/Fertigation: 2–4 qt/ac · Starter/side-dress: 1–4 pt/ac" },
+  { matchName: "NUTRIO UNLOCK",          label: "NUTRIO UNLOCK",          cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 8, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+    labelRate: "1–8 pt/ac" },
   { matchName: "PURIC FC",               label: "PURIC FC",               cat: "Fertilizer Treatment", rateUnit: "pt/ac",  rateMin: 1, rateMax: 2, defaultRate: 1, isNTreatment: false, preferPkg: "275 GA",
     labelRate: "Foliar & Soil: 1–2 pt/ac" },
-  { matchName: "PURIC PRIME",            label: "PURIC PRIME",            cat: "Fertilizer Treatment", rateUnit: "gal/ac", rateMin: 0.25, rateMax: 5, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
+  { matchName: "PURIC PRIME",            label: "PURIC PRIME",            cat: "Fertilizer Treatment", rateUnit: "gal/ac", rateMin: 0.25, rateMax: 5, defaultRate: 0.25, rateStep: 0.25, isNTreatment: false, preferPkg: "270 GA",
     labelRate: "Soil: 1 qt–5 gal/ac (or more) · Foliar: 1–3 qt/ac · Fertigation: 1–5 gal/ac" },
   { matchName: "TILL-IT 9% ZINC EDTA",   label: "TILL-IT 9% ZINC EDTA",   cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 4, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
     labelRate: "Soil: 1–4 qt/ac · Foliar (field/row/veg): 0.5–1 qt/ac (up to 2 qt/ac tree fruit)" },
-  { matchName: "TILL-IT DUO ZINC 9%",    label: "TILL-IT DUO ZINC 9%",    cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 8, defaultRate: 2, isNTreatment: false, preferPkg: "270 GA",
+  { matchName: "TILL-IT DUO ZINC 9%",    label: "TILL-IT DUO ZINC 9%",    cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 1, rateMax: 8, defaultRate: 1, isNTreatment: false, preferPkg: "270 GA",
     labelRate: "Soil (row/field): 1–8 qt/ac · Foliar: do not exceed 1 qt/ac (blended only)" },
   { matchName: "TILL-IT KILOWATT BASE",  label: "TILL-IT KILOWATT BASE", cat: "Soil / Starter",      rateUnit: "qt/ac",  rateMin: 2, rateMax: 6, defaultRate: 2, isNTreatment: false, preferPkg: "BULK",
     labelRate: "Soil/in-furrow: 2–6 qt/ac (+ up to 2 gal/ac fertigation) · Foliar: 1–6 qt/ac" },
@@ -2530,37 +2532,50 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
     setVaPrices(prev => { const n = { ...prev }; delete n[matchName]; return n; });
     Analytics.track("calc_va_package_changed", { product: matchName, pkg });
   };
-  // Admins have no location/district of their own, so Value-Add pricing has
-  // nothing real to resolve against by default -- give them an explicit
-  // East/West toggle instead (same idea as ProfitSheet's district toggle).
-  // Everyone else pulls their own real district/location, no toggle shown.
+  // Admins (and full-access managers, e.g. Walt) have no fixed location of
+  // their own -- give them an explicit East/West district toggle (same idea
+  // as ProfitSheet's district toggle) PLUS a real location picker scoped to
+  // whichever district is chosen (2026-09-02: previously this only offered
+  // a district toggle, with a SEPARATE, redundant "Till-It: X" bucket picker
+  // buried near the product dropdown -- unified into one upfront picker so
+  // picking a location before the product also pre-fills a plain
+  // commodity's real cost, not just a Till-It blend's).
   const [adminDist, setAdminDist] = useState(district === "wtx" ? "wtx" : "etx");
   const effectiveDistrict = isAdmin ? adminDist : (district === "wtx" ? "wtx" : "etx");
+  const adminDistLocations = useMemo(() => (locations || []).filter(l => l.district_id === adminDist), [locations, adminDist]);
+  const [adminLocOverride, setAdminLocOverride] = useState(null);
+  // Falls back to the district's first location whenever the override
+  // doesn't belong to the currently-toggled district (e.g. right after
+  // switching West<->East) rather than requiring an explicit reset handler.
+  const activeAdminLocation = (adminLocOverride && adminDistLocations.some(l => l.id === adminLocOverride))
+    ? adminLocOverride : (adminDistLocations[0]?.id || null);
+
   // Managers can oversee more than one location -- give them a picker among
-  // just their own locationIds (not the full admin 4-way picker) instead of
+  // just their own locationIds (not the full admin picker) instead of
   // silently always resolving against locationIds[0].
   const myLocIds = locationIds || [];
   const [managerLocOverride, setManagerLocOverride] = useState(null);
-  const activeLocation = isAdmin ? null : (isManager ? (managerLocOverride || myLocIds[0] || location) : location);
-  const effectiveLocation = isAdmin ? null : activeLocation;
+  const activeLocation = isAdmin ? activeAdminLocation : (isManager ? (managerLocOverride || myLocIds[0] || location) : location);
+  const effectiveLocation = activeLocation;
 
   // Till-It Blend pricing has 4 real buckets (Lonestar/Batesville/RGV each
   // have their own real cost basis, "hereford_wtx" represents the whole West
-  // TX district) -- doesn't collapse into the wtx/etx toggle above. Admins
-  // get an explicit 4-way picker; everyone else (including managers, via
-  // their own location picker above) is auto-resolved from their real
-  // location name (falling back to hereford_wtx for any West TX location, or
-  // null -- no Till-It Blend pricing available yet -- for an East TX
-  // location that isn't specifically one of the 3 named ones).
+  // TX district) -- doesn't collapse into the wtx/etx toggle above. Resolved
+  // uniformly for everyone (admin/full-manager included, now that they pick
+  // a real location above) from the chosen location's real name, falling
+  // back to hereford_wtx for any West TX location, or null -- no Till-It
+  // Blend pricing available yet -- for an East TX location that isn't
+  // specifically one of the 3 named ones.
   const TILL_IT_BUCKET_LABELS = { lonestar: "Lonestar", batesville: "Batesville", rgv: "RGV", hereford_wtx: "West TX" };
-  const [tillItAdminBucket, setTillItAdminBucket] = useState("hereford_wtx");
   const myLocationName = (activeLocation && locations.find(l => l.id === activeLocation)?.name || "").toLowerCase();
   const autoTillItBucket = myLocationName === "lonestar" ? "lonestar"
     : myLocationName === "batesville" ? "batesville"
-    : myLocationName === "rgv" ? "rgv"
+    // Edinburg and Rio Hondo share RGV's real Till-It cost/pricing in FertHub
+    // (Nathan, 2026-09-02) -- not their own separate bucket.
+    : (myLocationName === "rgv" || myLocationName === "edinburg" || myLocationName === "rio hondo") ? "rgv"
     : effectiveDistrict === "wtx" ? "hereford_wtx"
     : null;
-  const tillItBucket = isAdmin ? tillItAdminBucket : autoTillItBucket;
+  const tillItBucket = autoTillItBucket;
 
   const tillItOptions = useMemo(() => {
     if (!tillItBucket) return [];
@@ -2769,15 +2784,28 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
           resolve against); everyone else just sees their own district/location
           confirmed, pulled from resolvePrice via effectiveDistrict/effectiveLocation. */}
       {isAdmin ? (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>Value-Add Pricing</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            {["wtx", "etx"].map(key => (
-              <button key={key} onClick={() => { setAdminDist(key); Analytics.track("calc_district_changed", { district: key }); }}
-                style={{ fontSize: 11, fontWeight: 700, color: adminDist === key ? S.onAccent : S.green, background: adminDist === key ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (adminDist === key ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
-                {key === "wtx" ? "West TX" : "East TX"}
-              </button>
-            ))}
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>District</div>
+            <div style={{ display: "flex", gap: 6 }}>
+              {["wtx", "etx"].map(key => (
+                <button key={key} onClick={() => { setAdminDist(key); setAdminLocOverride(null); Analytics.track("calc_district_changed", { district: key }); }}
+                  style={{ fontSize: 11, fontWeight: 700, color: adminDist === key ? S.onAccent : S.green, background: adminDist === key ? S.green : "rgba(76,175,106,.1)", border: "1px solid " + (adminDist === key ? S.green : "rgba(76,175,106,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer", letterSpacing: .3 }}>
+                  {key === "wtx" ? "West TX" : "East TX"}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>Location</div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {adminDistLocations.map(l => (
+                <button key={l.id} onClick={() => { setAdminLocOverride(l.id); Analytics.track("calc_admin_location_changed", { location: l.id }); }} type="button"
+                  style={{ fontSize: 11, fontWeight: 700, color: activeAdminLocation === l.id ? S.onAccent : S.blue, background: activeAdminLocation === l.id ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (activeAdminLocation === l.id ? S.blue : "rgba(91,155,213,.3)"), padding: "6px 12px", borderRadius: 6, cursor: "pointer" }}>
+                  {l.name}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       ) : isManager && myLocIds.length > 1 ? (
@@ -2820,17 +2848,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                 </optgroup>
               )}
             </select>
-            {isAdmin && (
-              <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-                {Object.entries(TILL_IT_BUCKET_LABELS).map(([key, label]) => (
-                  <button key={key} onClick={() => setTillItAdminBucket(key)} type="button"
-                    style={{ fontSize: 10, fontWeight: 700, color: tillItAdminBucket === key ? S.onAccent : S.blue, background: tillItAdminBucket === key ? S.blue : "rgba(91,155,213,.1)", border: "1px solid " + (tillItAdminBucket === key ? S.blue : "rgba(91,155,213,.3)"), padding: "4px 9px", borderRadius: 6, cursor: "pointer" }}>
-                    Till-It: {label}
-                  </button>
-                ))}
-              </div>
-            )}
-            {!isAdmin && !tillItBucket && (
+            {!tillItBucket && (
               <div style={{ fontSize: 10, color: S.muted, marginTop: 6 }}>
                 Till-It Blend pricing isn't set up for your location yet — available at Lonestar, Batesville, RGV, and West TX so far.
               </div>
@@ -3011,7 +3029,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, marginBottom: 6 }}>
                       <span style={{ color: S.muted }}>Rate ({p.rateUnit})</span>
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                        <input type="number" value={currentRate} min={p.rateMin} max={p.rateMax} step="0.5"
+                        <input type="number" value={currentRate} min={p.rateMin} max={p.rateMax} step={p.rateStep || 0.5}
                           onChange={e => setVaRates(prev => ({ ...prev, [p.matchName]: parseFloat(e.target.value) || 0 }))}
                           onClick={e => e.stopPropagation()}
                           style={{ width: 55, padding: "4px 6px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 13, textAlign: "center", outline: "none" }} />
