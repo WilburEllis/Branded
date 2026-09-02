@@ -269,6 +269,23 @@ function resolvePrice(p, district, location, overridesMap) {
   return { floor: null, target: null, label: "East TX", isOverride: false };
 }
 
+// A "full-access manager" (2026-09-02, e.g. Walt Esser -- a district manager
+// over BOTH East and West TX) is role="manager" with district explicitly set
+// to the literal "both", distinguishing them from every other manager, who's
+// always scoped to exactly one real district. Deliberately a real, explicit
+// value rather than a blank/null district -- a manager profile left blank
+// by some future bug or bad import would otherwise silently inherit
+// company-wide access, which a value that must be set on purpose can't do.
+// They get the same BREADTH of data as admin (both districts, every
+// location, the admin-style product/Sheet/Calculator views) but NONE of
+// admin's actions (no Category management, no Access Requests approval, no
+// Analytics) -- see hasFullAccess in App(), which OR's this with real
+// isAdmin for every breadth-related gate, while every action-gated isAdmin
+// check elsewhere stays untouched (real admin only).
+function isFullAccessManager(profile) {
+  return !!profile && profile.role === "manager" && profile.district === "both";
+}
+
 function hasDistrictPrice(p, district, location, overridesMap) {
   const r = resolvePrice(p, district, location, overridesMap);
   return r.target != null || r.floor != null;
@@ -2661,6 +2678,12 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
 
   const onProductChange = (val) => {
     setFertProduct(val);
+    // Sell price never got cleared on a product switch -- a Till-It blend's
+    // auto-computed price (or a manually-typed one) would just keep showing
+    // for whatever gets picked next. A Till-It blend re-fills this correctly
+    // on its own (see the useEffect above, keyed on tillItKey), so clearing
+    // it unconditionally here is safe either way.
+    setSellPerTon("");
     if (val) Analytics.track("calc_commodity", { product: val });
     const tillIt = tillItOptions.find(r => r.blend_id === val);
     if (tillIt) {
@@ -3082,7 +3105,7 @@ const SHEET_HEADERS = [
   { label: "", key: null },
 ];
 
-function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, canEdit, isAdmin, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
+function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, canEdit, isAdmin, seesAllDistricts, landedCosts, labelUrls, onCategoryChange, onBulkCategoryChange }) {
   const [dist, setDist] = useState(defaultDistrict === "wtx" ? "wtx" : "etx");
   const [tier, setTier] = useState("floor"); // wholesale | floor | target
   const [search, setSearch] = useState("");
@@ -3576,7 +3599,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
     const ov = priceOverrides[priceOverrideKey(p.item)];
     if (ov) {
       const raw = rawPriceFor(p);
-      return { price: ov.newPrice, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
+      return { price: ov.newPrice, label: raw.label.replace(/ \(Nat\)$/, "") + (ov.synced ? " (auto)" : " (edited)"), isEdited: true };
     }
     return { ...rawPriceFor(p), isEdited: false };
   }
@@ -3586,11 +3609,26 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // consult the shared priceOverrides map, so Value Ladder what-if edits and
   // other saved sheets' bid prices never leak into this sheet, and this
   // sheet's bid prices never leak into them.
+  //
+  // Floor is always 5% below Target (Nathan's rule, 2026-09-02) -- a sheet
+  // item only ever stores ONE edited tier at a time (si.priceTier), and the
+  // OTHER tier is derived from it on the fly here rather than stored
+  // separately. That's deliberate, not a shortcut: keeping a single source
+  // of truth means the two can never silently drift apart from each other --
+  // whichever one was actually typed in most recently IS the real edit, and
+  // the other is always exactly 5% away from it.
   function sheetItemPriceFor(si, p) {
     const curDist = tier === "wholesale" ? "any" : dist;
     if (si.price != null && si.priceTier === tier && si.priceDist === curDist) {
       const raw = rawPriceFor(p);
       return { price: si.price, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
+    }
+    if (si.price != null && si.priceDist === curDist && tier !== "wholesale" && si.priceTier !== "wholesale") {
+      const derived = si.priceTier === "target" ? si.price * 0.95 : si.priceTier === "floor" ? si.price / 0.95 : null;
+      if (derived != null) {
+        const raw = rawPriceFor(p);
+        return { price: derived, label: raw.label.replace(/ \(Nat\)$/, "") + " (auto)", isEdited: true };
+      }
     }
     return { ...rawPriceFor(p), isEdited: false };
   }
@@ -3603,19 +3641,36 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // the open sheet's own dial-in prices, never another saved sheet's.
   const allPriceEdits = useMemo(() => {
     const ladder = Object.entries(priceOverrides).map(([key, ov]) => ({ ...ov, key, source: "ladder" }));
-    const sheet = sheetItems.filter(si => si.price != null && si.priceTier != null).map(si => {
+    const sheet = sheetItems.filter(si => si.price != null && si.priceTier != null).flatMap(si => {
       const p = resolveProduct(si.item);
-      if (!p) return null;
+      if (!p) return [];
       const raw = rawPriceFor(p, si.priceTier, si.priceDist);
-      return {
+      const entries = [{
         key: "sheet|" + si.item + "|" + si.priceTier + "|" + si.priceDist,
         item: si.item, productName: p.name, pkg: p.pkg,
         tier: si.priceTier, dist: si.priceDist, isNat: raw.isNat,
         newPrice: si.price, originalPrice: raw.price,
         dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
         source: "sheet",
-      };
-    }).filter(Boolean);
+      }];
+      // Floor is always 5% below Target -- push the derived counterpart
+      // column too, so saving actually keeps both in sync in the real
+      // database, not just on screen (see sheetItemPriceFor above).
+      if (si.priceTier === "target" || si.priceTier === "floor") {
+        const counterpartTier = si.priceTier === "target" ? "floor" : "target";
+        const counterpartPrice = si.priceTier === "target" ? si.price * 0.95 : si.price / 0.95;
+        const counterpartRaw = rawPriceFor(p, counterpartTier, si.priceDist);
+        entries.push({
+          key: "sheet|" + si.item + "|" + counterpartTier + "|" + si.priceDist + "|synced",
+          item: si.item, productName: p.name, pkg: p.pkg,
+          tier: counterpartTier, dist: si.priceDist, isNat: counterpartRaw.isNat,
+          newPrice: counterpartPrice, originalPrice: counterpartRaw.price,
+          dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+          source: "sheet", synced: true,
+        });
+      }
+      return entries;
+    });
     return [...ladder, ...sheet];
   }, [priceOverrides, sheetItems, txData, natAdaptedByItem]);
 
@@ -3663,15 +3718,35 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   function setPriceOverride(p, newPrice) {
     const key = priceOverrideKey(p.item);
     const raw = rawPriceFor(p);
-    setPriceOverrides(prev => ({
-      ...prev,
-      [key]: {
-        item: p.item, productName: p.name, pkg: p.pkg,
-        tier, dist: tier === "wholesale" ? "any" : dist, isNat: raw.isNat,
-        newPrice, originalPrice: prev[key] ? prev[key].originalPrice : raw.price,
-        dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
-      },
-    }));
+    setPriceOverrides(prev => {
+      const next = {
+        ...prev,
+        [key]: {
+          item: p.item, productName: p.name, pkg: p.pkg,
+          tier, dist: tier === "wholesale" ? "any" : dist, isNat: raw.isNat,
+          newPrice, originalPrice: prev[key] ? prev[key].originalPrice : raw.price,
+          dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+        },
+      };
+      // Floor is always 5% below Target (Nathan's rule, 2026-09-02) -- editing
+      // either one keeps the other in sync automatically, rather than letting
+      // them silently drift apart. Wholesale has no such relationship.
+      if (tier === "target" || tier === "floor") {
+        const counterpartTier = tier === "target" ? "floor" : "target";
+        const counterpartPrice = tier === "target" ? newPrice * 0.95 : newPrice / 0.95;
+        const counterpartKey = p.item + "|" + counterpartTier + "|" + dist;
+        const counterpartRaw = rawPriceFor(p, counterpartTier, dist);
+        next[counterpartKey] = {
+          item: p.item, productName: p.name, pkg: p.pkg,
+          tier: counterpartTier, dist, isNat: counterpartRaw.isNat,
+          newPrice: counterpartPrice,
+          originalPrice: prev[counterpartKey] ? prev[counterpartKey].originalPrice : counterpartRaw.price,
+          dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+          synced: true,
+        };
+      }
+      return next;
+    });
     Analytics.track("sheet_price_override", { item: p.item, product: p.name, tier, newPrice });
   }
   function clearPriceOverride(key) {
@@ -3960,7 +4035,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div>
             <div style={{ fontSize: 9, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 4 }}>District</div>
-            {isAdmin ? (
+            {seesAllDistricts ? (
               <div style={{ display: "flex", gap: 6 }}>{distBtn("wtx", "West TX")}{distBtn("etx", "East TX")}</div>
             ) : (
               <div style={{ fontSize: 12, fontWeight: 700, color: S.text, padding: "5px 0" }}>{dist === "wtx" ? "West TX" : "East TX"}</div>
@@ -4469,7 +4544,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                   {allPriceEdits.map(ov => (
                     <tr key={ov.key}>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.text }}>{ov.productName}{ov.pkg ? " (" + ov.pkg + ")" : ""}</td>
-                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted, textTransform: "capitalize" }}>{ov.tier}{ov.tier !== "wholesale" ? " · " + (ov.dist === "wtx" ? "West" : "East") : ""}</td>
+                      <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted, textTransform: "capitalize" }}>{ov.tier}{ov.tier !== "wholesale" ? " · " + (ov.dist === "wtx" ? "West" : "East") : ""}{ov.synced ? <span style={{ color: S.blue, textTransform: "none" }} title="Auto-derived: Floor is always 5% below Target"> (auto)</span> : ""}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 11, color: S.muted }}>{ov.source === "sheet" ? "My Sheet" : "Value Ladder"}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.muted, textAlign: "right" }}>{fmt(ov.originalPrice)}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.amber, fontWeight: 700, textAlign: "right" }}>{fmt(ov.newPrice)}</td>
@@ -4946,7 +5021,7 @@ function App() {
   const natAlpha = ["ALL", "A-F", "G-L", "M-R", "S-Z"];
 
   const districtProducts = useMemo(() => {
-    if (!profile || profile.role === "admin" || profile.role === "viewer_admin") return [];
+    if (!profile || profile.role === "admin" || profile.role === "viewer_admin" || isFullAccessManager(profile)) return [];
     const dist = profile.district;
     const loc = profile.location_ids?.[0] || null;
     return txData.filter(p => hasDistrictPrice(p, dist, loc, overridesMap));
@@ -4958,7 +5033,7 @@ function App() {
   }, [districtProducts]);
 
   const natOnlyProducts = useMemo(() => {
-    if (!profile || profile.role === "admin" || profile.role === "viewer_admin") return [];
+    if (!profile || profile.role === "admin" || profile.role === "viewer_admin" || isFullAccessManager(profile)) return [];
     const txItems = new Set(districtProducts.map(p => p.item));
     const isSalesRep = profile.role !== "manager";
     // For sales reps: hide any national product where a district SKU target exceeds national target
@@ -4984,8 +5059,8 @@ function App() {
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
-    const isAdmin = profile?.role === "admin" || profile?.role === "viewer_admin";
-    if (isAdmin) {
+    const hasFullAccess = profile?.role === "admin" || profile?.role === "viewer_admin" || isFullAccessManager(profile);
+    if (hasFullAccess) {
       if (view === "tx") return txData.filter(p => (catFilter === "ALL" || p.cat === catFilter) && (!q || p.name.toLowerCase().includes(q) || String(p.item).includes(q)));
       if (view === "nat") return natData.filter(p => {
         const first = p.name[0]?.toUpperCase();
@@ -5031,6 +5106,14 @@ function App() {
   if (!profile) return <LoadingScreen />;
 
   const isAdmin = profile.role === "admin" || profile.role === "viewer_admin";
+  // A full-access manager (see isFullAccessManager()) gets the same BREADTH
+  // as admin -- both districts, every location, admin-style product/Sheet/
+  // Calculator views -- but none of admin's actions. Every breadth-related
+  // gate below uses hasFullAccess; every action-gated check (Category
+  // management, Access Requests, Analytics) stays on the real isAdmin/
+  // profile.role checks, untouched.
+  const isFullManager = isFullAccessManager(profile);
+  const hasFullAccess = isAdmin || isFullManager;
   const hideCost = profile.role === "viewer_admin";
   // Sheet/Ladder/category-editing access: Admin + Manager roles only. NOT the
   // same gate as hideCost -- hideCost only governs the admin-style card's
@@ -5045,7 +5128,7 @@ function App() {
   const isManager = locIds.length > 1;
   const districtLabel = isManager ? (dist === "wtx" ? "West TX Manager" : "East TX Manager") : loc ? (locations.find(l => l.id === loc)?.name || dist) : dist === "wtx" ? "West Texas" : "East Texas";
 
-  const tabs = isAdmin ? [
+  const tabs = hasFullAccess ? [
     { key: "tx", label: "TX Products" }, { key: "tillit", label: "TILL-IT BLENDS", color: S.amber },
     { key: "nat", label: "National Ref" },
     { key: "all", label: "All" }, { key: "organic", label: "◆ Organic", color: "#4ade80" },
@@ -5057,7 +5140,7 @@ function App() {
     { key: "favorites", label: "⭐ Favorites", color: "#f59e0b" },
   ];
 
-  const pills = isAdmin
+  const pills = hasFullAccess
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
 
@@ -5079,10 +5162,10 @@ function App() {
   let content = null;
   let countText = "";
 
-  if (isAdmin) {
+  if (hasFullAccess) {
     if (view === "tillit") {
       countText = "Real cost/floor pricing pulled from FertHub";
-      content = <TillItBlendsView tillItBlendPrices={tillItBlendPrices} isAdmin={isAdmin} isManager={isManager} profile={profile} locations={locations} labelUrls={labelUrls} hideCost={hideCost} />;
+      content = <TillItBlendsView tillItBlendPrices={tillItBlendPrices} isAdmin={hasFullAccess} isManager={isManager} profile={profile} locations={locations} labelUrls={labelUrls} hideCost={hideCost} />;
     } else if (view === "tx") {
       const groups = groupByName(filtered);
       countText = groups.length + " products · " + filtered.length + " SKUs";
@@ -5154,7 +5237,7 @@ function App() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div>
             <div style={{ fontSize: 18, fontWeight: 800, color: appMode === "calc" ? S.amber : appMode === "analytics" ? S.purple : appMode === "sheet" ? S.blue : S.green, letterSpacing: .5, textTransform: "uppercase" }}>{appMode === "calc" ? "⚡ Blend Calculator" : appMode === "analytics" ? "📊 Analytics" : appMode === "sheet" ? "🧮 Profit Sheet" : "📋 Price Lookup"}</div>
-            <div style={{ fontSize: 10, color: S.muted, letterSpacing: 2, textTransform: "uppercase", marginTop: 1 }}>2026 TX Branded · Wilbur-Ellis{isAdmin ? "" : " · " + districtLabel}</div>
+            <div style={{ fontSize: 10, color: S.muted, letterSpacing: 2, textTransform: "uppercase", marginTop: 1 }}>2026 TX Branded · Wilbur-Ellis{hasFullAccess ? "" : " · " + districtLabel}</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             {profile.role === "admin" && (
@@ -5211,7 +5294,7 @@ function App() {
         </React.Fragment>)}
       </header>
 
-      {appMode === "prices" && !(isAdmin && view === "all") && view !== "tillit" && (
+      {appMode === "prices" && !(hasFullAccess && view === "all") && view !== "tillit" && (
         <div style={{ display: "flex", gap: 5, overflowX: "auto", padding: "8px 14px 2px", scrollbarWidth: "none" }}>
           {pills.map(c => (
             <button key={c} onClick={() => setCatFilter(c)}
@@ -5230,12 +5313,12 @@ function App() {
       )}
 
       {appMode === "calc" && (
-        <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} labelUrls={labelUrls} isAdmin={isAdmin} tillItBlendPrices={tillItBlendPrices} commodityFertilizerPrices={commodityFertilizerPrices} isManager={isManager} locationIds={locIds} />
+        <BlendCalculator profile={profile} district={dist} location={loc} txData={txData} overridesMap={overridesMap} hideCost={hideCost} locations={locations} labelUrls={labelUrls} isAdmin={hasFullAccess} tillItBlendPrices={tillItBlendPrices} commodityFertilizerPrices={commodityFertilizerPrices} isManager={isManager} locationIds={locIds} />
       )}
 
       {canUseSheet && (
         <div style={{ display: appMode === "sheet" ? "block" : "none" }}>
-          <ProfitSheet defaultDistrict={dist} txData={txData} natData={natData} overridesMap={overridesMap} session={session} canEdit={canUseSheet} isAdmin={isAdmin} landedCosts={landedCosts} labelUrls={labelUrls}
+          <ProfitSheet defaultDistrict={dist} txData={txData} natData={natData} overridesMap={overridesMap} session={session} canEdit={canUseSheet} isAdmin={isAdmin} seesAllDistricts={hasFullAccess} landedCosts={landedCosts} labelUrls={labelUrls}
             onCategoryChange={(item, newCat) => {
               // A recategorized product might be sourced from either list --
               // e.g. a National-search item added to a sheet lives in natData,
