@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.1.1";
+const APP_VERSION = "2.1.2";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -4998,7 +4998,7 @@ function App() {
           setAccessRequests(reqs || []);
         }
 
-        setView(prof?.role === "admin" || prof?.role === "viewer_admin" ? "tx" : "district");
+        setView(prof?.role === "admin" || prof?.role === "viewer_admin" || isFullAccessManager(prof) ? "tx" : "district");
       } catch (err) {
         console.error("Load error:", err);
         setConnError("Error loading data: " + (err.message || String(err)));
