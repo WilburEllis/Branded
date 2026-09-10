@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.1.2";
+const APP_VERSION = "2.1.3";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -4947,7 +4947,7 @@ function App() {
         (catOverrides || []).forEach(o => { catOverrideMap[o.sku_item] = o.category; });
         setTxData((tx || []).map(p => catOverrideMap[p.item] ? { ...p, cat: catOverrideMap[p.item] } : p));
 
-        const { data: nat } = await supabaseClient.from("national_prices").select("*").order("name");
+        const { data: nat } = await supabaseClient.from("national_prices").select("*").eq("active", true).order("name");
         // Same override merge as txData just above -- a category assigned to
         // a National-only product (see My Sheet's "Uncategorized" picker)
         // needs to survive a page reload too, not just the current session.
@@ -4969,8 +4969,8 @@ function App() {
         const { data: locs } = await supabaseClient.from("locations").select("*");
         setLocations(locs || []);
 
-        const { data: orgSkus } = await supabaseClient.from("skus").select("name").eq("is_organic", true);
-        const { data: orgNat } = await supabaseClient.from("national_prices").select("name").eq("is_organic", true);
+        const { data: orgSkus } = await supabaseClient.from("skus").select("name").eq("is_organic", true).eq("active", true);
+        const { data: orgNat } = await supabaseClient.from("national_prices").select("name").eq("is_organic", true).eq("active", true);
         const allOrg = new Set([...(orgSkus || []).map(s => s.name), ...(orgNat || []).map(s => s.name)]);
         setOrganicNames(allOrg);
 
