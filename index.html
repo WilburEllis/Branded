@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.1.3";
+const APP_VERSION = "2.1.4";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -1390,7 +1390,7 @@ function TillItBlendsView({ tillItBlendPrices, isAdmin, isManager, profile, loca
                 {isAdmin && !hideCost && (
                   <div style={{ display: "flex", gap: 16, marginTop: 8, paddingTop: 8, borderTop: "1px solid " + S.border, fontSize: 11 }}>
                     <div><span style={{ color: S.muted }}>Cost{isDry ? "/lb" : "/gal"}: </span><span style={{ fontWeight: 700 }}>${costVal != null ? costVal.toFixed(2) : "—"}</span></div>
-                    {!isDry && <div><span style={{ color: S.muted }}>Floor/ton: </span><span style={{ fontWeight: 700 }}>${r.target_price_per_ton.toFixed(2)}</span></div>}
+                    {!isDry && <div><span style={{ color: S.muted }}>Floor/gal: </span><span style={{ fontWeight: 700 }}>${floorVal != null ? floorVal.toFixed(2) : "—"}</span></div>}
                     <div><span style={{ color: S.muted }}>Margin: </span><span style={{ fontWeight: 700 }}>{(r.margin * 100).toFixed(0)}%</span></div>
                   </div>
                 )}
