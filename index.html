@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.1.4";
+const APP_VERSION = "2.1.8";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -2521,6 +2521,14 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const [carrierGPA, setCarrierGPA] = useState("");
   const [activeVA, setActiveVA] = useState({});
   const [vaRates, setVaRates] = useState({});
+  // Raw typed text for the "Total Gal/Load" field, keyed by matchName --
+  // kept separate from the derived (rounded) display value so typing a
+  // multi-digit/decimal number doesn't get stomped by re-rounding on every
+  // keystroke. Cleared whenever the Rate input is edited directly instead,
+  // so the gal field falls back to showing what Rate now derives.
+  // (2026-10-14, Nathan: edit either Rate/ac or Total Gal/Load, the other
+  // recomputes automatically.)
+  const [vaGalRaw, setVaGalRaw] = useState({});
   const [vaPrices, setVaPrices] = useState({});
   const [vaPkgOverride, setVaPkgOverride] = useState({});
 
@@ -2734,7 +2742,10 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   // Value-add calculations
   const vaCalcs = vaProducts.map(p => {
     if (!activeVA[p.matchName]) return { ...p, active: false, usageGal: 0, profit: 0, explanation: "" };
-    const rate = vaRates[p.matchName] !== undefined ? vaRates[p.matchName] : p.defaultRate;
+    // vaRates holds the RAW typed text (see the rate <input> below) so a
+    // decimal point never gets stomped mid-type -- parse it here, same
+    // pattern as cost/sell/load/GPA elsewhere in this component.
+    const rate = vaRates[p.matchName] !== undefined ? (parseFloat(vaRates[p.matchName]) || 0) : p.defaultRate;
     const sellPrice = vaPrices[p.matchName] !== undefined ? vaPrices[p.matchName] : p.target;
     const profitPerGal = sellPrice - p.cost;
 
@@ -2764,6 +2775,40 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
 
   const totalVAProfit = vaCalcs.filter(v => v.active).reduce((sum, v) => sum + v.profit, 0);
   const totalProfit = commodityProfit + totalVAProfit;
+
+  // Blended all-in Price/Ton and Price/Ac -- what the grower is actually
+  // charged for the whole load (commodity + every active value-add), not
+  // just the profit on it. Added 2026-10-14 per Nathan, shown at the bottom
+  // of the Profit Breakdown table below.
+  const commodityRevenue = sell * loadWeightTons;
+  const totalVARevenue = vaCalcs.filter(v => v.active).reduce((sum, v) => sum + v.usageGal * v.sellPrice, 0);
+  const totalRevenue = commodityRevenue + totalVARevenue;
+  const pricePerTon = loadWeightTons > 0 ? totalRevenue / loadWeightTons : null;
+  const pricePerAc = acresPerLoad > 0 ? totalRevenue / acresPerLoad : null;
+  const pricePerGal = loadGal > 0 ? totalRevenue / loadGal : null;
+
+  // Inverse of the Rate -> Gallons-into-load math above, so Nathan can type
+  // either Rate (per ac, or per ton for an N-treatment) or Total Gal/Load
+  // and have the other recompute automatically (2026-10-14).
+  const onVaGalChange = (p, rawVal) => {
+    setVaGalRaw(prev => ({ ...prev, [p.matchName]: rawVal }));
+    const gal = parseFloat(rawVal);
+    if (isNaN(gal) || gal < 0) return;
+    const totalQts = gal * 4;
+    let newRate;
+    if (p.isNTreatment) {
+      if (loadWeightTons <= 0) return;
+      newRate = totalQts / loadWeightTons;
+    } else {
+      if (acresPerLoad <= 0) return;
+      const qtsPerAcre = totalQts / acresPerLoad;
+      newRate = p.rateUnit === "pt/ac" ? qtsPerAcre * 2 : p.rateUnit === "gal/ac" ? qtsPerAcre / 4 : qtsPerAcre;
+    }
+    // Rounded to 3 decimals -- vaRates is raw text now (see the Rate input
+    // below), so an unrounded float would otherwise show ugly repeating
+    // decimals (e.g. "2.3333333333333335") while this field isn't focused.
+    setVaRates(prev => ({ ...prev, [p.matchName]: String(+newRate.toFixed(3)) }));
+  };
 
   const profitColor = totalProfit >= 1000 ? S.green : "#ef4444";
   const profitGlow = totalProfit >= 1000 ? "rgba(76,175,106,.15)" : "rgba(239,68,68,.15)";
@@ -2864,7 +2909,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
 
           <div style={{ marginBottom: 12 }}>
             <label style={labelStyle}>Weight (lb/gal)</label>
-            <input type="number" value={weightPerGal} onChange={e => setWeightPerGal(e.target.value)} step="0.01" placeholder="Auto-filled or enter manually" style={inputStyle} />
+            <input type="number" value={weightPerGal} onChange={e => setWeightPerGal(e.target.value)} onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()} step="0.01" placeholder="Auto-filled or enter manually" style={inputStyle} />
           </div>
 
           {selectedTillIt ? (
@@ -2873,7 +2918,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                 <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
                   <div style={{ flex: 1 }}>
                     <label style={labelStyle}>Cost ($/ton) — from FertHub</label>
-                    <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} step="0.01" style={inputStyle} />
+                    <input type="number" value={costPerTon} onChange={e => setCostPerTon(e.target.value)} onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()} step="0.01" style={inputStyle} />
                   </div>
                   <div style={{ flex: 1 }}>
                     <label style={labelStyle}>Sell Price ($/ton)</label>
@@ -2898,6 +2943,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                 <input type="number" value={tillItMarginPct != null ? tillItMarginPct : (selectedTillIt.margin * 100).toFixed(1)}
                   min={selectedTillIt.margin * 100} max="100" step="1"
                   onChange={e => setTillItMarginPct(Math.max(parseFloat(e.target.value) || 0, selectedTillIt.margin * 100))}
+                  onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
                   style={{ ...inputStyle, textAlign: "center", flex: 1 }} />
                 <button type="button" onClick={() => setTillItMarginPct(prev => Math.min((prev != null ? prev : selectedTillIt.margin * 100) + 1, 100))}
                   style={{ width: 34, height: 34, borderRadius: 8, border: "1px solid " + S.border, background: S.inputBg, color: S.text, fontSize: 16, fontWeight: 700, cursor: "pointer" }}>+</button>
@@ -2914,7 +2960,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
               </div>
               <div style={{ flex: 1 }}>
                 <label style={labelStyle}>Sell Price ($/ton)</label>
-                <input type="number" value={sellPerTon} onChange={e => setSellPerTon(e.target.value)} step="0.01" placeholder="0.00" style={inputStyle} />
+                <input type="number" value={sellPerTon} onChange={e => setSellPerTon(e.target.value)} onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()} step="0.01" placeholder="0.00" style={inputStyle} />
               </div>
             </div>
           )}
@@ -2922,11 +2968,11 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
           <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
             <div style={{ flex: 1 }}>
               <label style={labelStyle}>Load Size (gallons)</label>
-              <input type="number" value={loadSize} onChange={e => setLoadSize(e.target.value)} step="100" style={inputStyle} />
+              <input type="number" value={loadSize} onChange={e => setLoadSize(e.target.value)} onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()} step="100" style={inputStyle} />
             </div>
             <div style={{ flex: 1 }}>
               <label style={{ ...labelStyle, color: gpa > 0 ? S.muted : S.amber }}>Application Rate (GPA){gpa <= 0 ? " — REQUIRED" : ""}</label>
-              <input type="number" value={carrierGPA} onChange={e => setCarrierGPA(e.target.value)} step="0.5" placeholder="⚠ Enter gal/ac"
+              <input type="number" value={carrierGPA} onChange={e => setCarrierGPA(e.target.value)} onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()} step="0.5" placeholder="⚠ Enter gal/ac"
                 style={{ ...inputStyle, borderColor: gpa > 0 ? S.border : S.amber, boxShadow: gpa > 0 ? "none" : "0 0 10px rgba(232,162,48,.25)" }} />
               {gpa <= 0 && <div style={{ fontSize: 10, color: S.amber, marginTop: 4, fontWeight: 600 }}>↑ Required for value-add calculations</div>}
             </div>
@@ -3030,18 +3076,33 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                       <span style={{ color: S.muted }}>Rate ({p.rateUnit})</span>
                       <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
                         <input type="number" value={currentRate} min={p.rateMin} max={p.rateMax} step={p.rateStep || 0.5}
-                          onChange={e => setVaRates(prev => ({ ...prev, [p.matchName]: parseFloat(e.target.value) || 0 }))}
+                          onChange={e => { setVaRates(prev => ({ ...prev, [p.matchName]: e.target.value })); setVaGalRaw(prev => { const n = { ...prev }; delete n[p.matchName]; return n; }); }}
+                          onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
                           onClick={e => e.stopPropagation()}
                           style={{ width: 55, padding: "4px 6px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 13, textAlign: "center", outline: "none" }} />
                         <span style={{ fontSize: 10, color: S.muted }}>({p.rateMin}-{p.rateMax})</span>
                       </span>
                     </div>
+                    {/* Total Gal/Load -- edit this instead of Rate above and
+                        it recomputes Rate automatically (and vice versa).
+                        Needs GPA (non-N-treatment) or a load weight
+                        (N-treatment) to convert, same requirement the
+                        Rate->Gal direction already has. */}
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, marginBottom: 6 }}>
+                      <span style={{ color: S.muted }}>Total Gal / Load</span>
+                      <span style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                        <input type="number" step="0.01"
+                          value={vaGalRaw[p.matchName] !== undefined ? vaGalRaw[p.matchName] : (calc ? calc.usageGal.toFixed(2) : "0.00")}
+                          disabled={p.isNTreatment ? loadWeightTons <= 0 : acresPerLoad <= 0}
+                          onChange={e => onVaGalChange(p, e.target.value)}
+                          onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+                          onClick={e => e.stopPropagation()}
+                          style={{ width: 65, padding: "4px 6px", background: S.card, border: "1px solid " + S.border, borderRadius: 6, color: S.text, fontSize: 13, textAlign: "center", outline: "none", opacity: (p.isNTreatment ? loadWeightTons <= 0 : acresPerLoad <= 0) ? .5 : 1 }} />
+                        <span style={{ fontSize: 10, color: S.muted }}>gal</span>
+                      </span>
+                    </div>
                     {calc && (
                       <React.Fragment>
-                        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
-                          <span style={{ color: S.muted }}>Gallons into Load</span>
-                          <span style={{ fontWeight: 600, color: S.blue }}>{calc.usageGal.toFixed(2)} gal</span>
-                        </div>
                         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" }}>
                           <span style={{ color: S.muted }}>Profit Added / Load</span>
                           <span style={{ fontWeight: 700, color: calc.profit >= 100 ? S.green : S.amber }}>+${fmtD(calc.profit)}</span>
@@ -3098,6 +3159,24 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                 </tr>
               </tbody>
             </table>
+            {/* Blended all-in sell price for the whole load (commodity +
+                every active value-add) expressed per gallon, per ton, and
+                per acre -- what you're actually charging the grower, not
+                the profit on it. Added 2026-10-14 per Nathan. */}
+            <div style={{ display: "flex", gap: 10, marginTop: 10 }}>
+              <div style={{ flex: 1, background: S.inputBg, borderRadius: 8, padding: "8px 10px", textAlign: "center", border: "1px solid " + S.border }}>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 2 }}>Price / Gal</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: S.text }}>{pricePerGal != null ? "$" + fmtD(pricePerGal) : "—"}</div>
+              </div>
+              <div style={{ flex: 1, background: S.inputBg, borderRadius: 8, padding: "8px 10px", textAlign: "center", border: "1px solid " + S.border }}>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 2 }}>Price / Ton</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: S.text }}>{pricePerTon != null ? "$" + fmtD(pricePerTon) : "—"}</div>
+              </div>
+              <div style={{ flex: 1, background: S.inputBg, borderRadius: 8, padding: "8px 10px", textAlign: "center", border: "1px solid " + S.border }}>
+                <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 2 }}>Price / Ac</div>
+                <div style={{ fontSize: 16, fontWeight: 800, color: S.text }}>{pricePerAc != null ? "$" + fmtD(pricePerAc) : "—"}</div>
+              </div>
+            </div>
           </div>
         </div>
       )}
