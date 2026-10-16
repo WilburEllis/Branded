@@ -10,7 +10,7 @@
 <meta http-equiv="Expires" content="0">
 <script>
 // Force refresh for home screen apps - bump this number with each deploy
-const APP_VERSION = "2.1.8";
+const APP_VERSION = "2.1.9";
 const storedVersion = localStorage.getItem("we_app_version");
 if (storedVersion && storedVersion !== APP_VERSION) {
   localStorage.setItem("we_app_version", APP_VERSION);
@@ -22,8 +22,10 @@ if (storedVersion && storedVersion !== APP_VERSION) {
 } else {
   localStorage.setItem("we_app_version", APP_VERSION);
 }
-// Applied before first paint so a saved "light" preference doesn't flash dark first.
-document.documentElement.dataset.weTheme = localStorage.getItem("we_theme") === "light" ? "light" : "dark";
+// Applied before first paint so a saved "dark" preference doesn't flash light
+// first. Default is "light" (2026-10-16, Nathan) -- only an explicit saved
+// "dark" switches it, everyone else (including every new user) sees light.
+document.documentElement.dataset.weTheme = localStorage.getItem("we_theme") === "dark" ? "dark" : "light";
 </script>
 <title>WE Price Lookup — 2026 TX Branded</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🌿</text></svg>">
@@ -127,12 +129,15 @@ const LIGHT_THEME = {
   tag: "#eef1e6", headerBg: "#f3f2ea", inputBg: "#ffffff", onAccent: "#ffffff",
   cellBg: "#f5f4ed", cellBgActive: "#e9f2ea"
 };
+// Default theme is "light" (2026-10-16) -- only an explicit saved "dark"
+// (someone who toggled it themselves) switches it, same default-flip as the
+// pre-paint script above so there's no mismatch on first load.
 function loadThemeMode() {
-  try { return localStorage.getItem("we_theme") === "light" ? "light" : "dark"; } catch (e) { return "dark"; }
+  try { return localStorage.getItem("we_theme") === "dark" ? "dark" : "light"; } catch (e) { return "light"; }
 }
 const S = { ...(loadThemeMode() === "light" ? LIGHT_THEME : DARK_THEME) };
 function applyThemeMode(mode) {
-  Object.assign(S, mode === "light" ? LIGHT_THEME : DARK_THEME);
+  Object.assign(S, mode === "dark" ? DARK_THEME : LIGHT_THEME);
   try { localStorage.setItem("we_theme", mode); } catch (e) {}
   document.documentElement.dataset.weTheme = mode;
 }
