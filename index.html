@@ -591,7 +591,7 @@ function InfoModal({ name, productInfo, onClose }) {
 }
 
 // ═══ PRODUCT CARD ═══
-function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite, landedCosts }) {
+function ProductCard({ p, district, location, isNational, isAdmin, isManager, hideCost, locationIds, allLocations, overridesMap, organicNames, productInfo, labelUrls, favorites, onToggleFavorite, landedCosts, pricingOverrides, setPricingOverride, clearPricingOverride }) {
   // Landed cost wins whenever it exists for the given district, regardless
   // of price tier -- manufactured cost (p.cost) is only a fallback. Shared
   // logic with ProfitSheet's costFor(), but this card shows multiple
@@ -696,17 +696,50 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
   }
 
   // ── Shared price cell renderer ──
-  function PriceCell({ k, l, v, c, sel, onSel, showMargin, cellCost }) {
+  function PriceCell({ k, l, v, c, sel, onSel, showMargin, cellCost, dbTier, dbDist, isNat, isAdmin, pricingOverrides, onCommit, onClearOverride }) {
     const isActive = sel === k;
     const cost = cellCost !== undefined ? cellCost : p.cost;
-    const mg = showMargin && cost != null && v != null && v > 0 ? ((v - cost) / v * 100).toFixed(1) + "%" : null;
+    // A pending Price Lookup edit (2026-10-27) -- separate from the existing
+    // sel/onSel "which tier drives Price Per Acre" click behavior below, so
+    // the two don't fight over the same click. Shows red + a reset link
+    // while pending, per Nathan ("highlights it red... until used or price
+    // reverted") -- deliberately red here, distinct from the Sheet's amber
+    // "(edited)" convention, since this one really does queue a database write.
+    const overrideKey = dbTier ? (p.item + "|" + dbTier + "|" + (dbDist || "any")) : null;
+    const ov = overrideKey && pricingOverrides ? pricingOverrides[overrideKey] : null;
+    const displayVal = ov ? ov.newPrice : v;
+    const mg = showMargin && cost != null && displayVal != null && displayVal > 0 ? ((displayVal - cost) / displayVal * 100).toFixed(1) + "%" : null;
+    const [editing, setEditing] = useState(false);
+    const [editVal, setEditVal] = useState("");
+    const canEdit = isAdmin && !!dbTier && !!onCommit;
+    function startEdit(e) {
+      e.stopPropagation();
+      setEditVal(displayVal != null ? String(displayVal) : "");
+      setEditing(true);
+    }
+    function doneEdit() {
+      const n = parseFloat(editVal);
+      if (!isNaN(n) && n >= 0 && n !== displayVal) onCommit({ k, dbTier, dbDist, isNat }, n);
+      setEditing(false);
+    }
     return (
-      <div onClick={e => { e.stopPropagation(); onSel(k); }} style={{ background: isActive ? S.cellBgActive : S.cellBg, padding: "6px 8px", cursor: "pointer", borderLeft: isActive ? "3px solid " + c : "3px solid transparent" }}>
+      <div onClick={e => { e.stopPropagation(); onSel(k); }} style={{ position: "relative", background: isActive ? S.cellBgActive : S.cellBg, padding: "6px 8px", cursor: "pointer", borderLeft: isActive ? "3px solid " + c : "3px solid transparent" }}>
         <div style={{ fontSize: 8, color: isActive ? c : S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>{l}{isActive ? " ✓" : ""}</div>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-          <div style={{ fontSize: 17, fontWeight: 700, color: c }}>{fmt(v)}</div>
+          {editing ? (
+            <input type="number" step="0.01" autoFocus value={editVal}
+              onClick={e => e.stopPropagation()}
+              onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+              onChange={e => setEditVal(e.target.value)}
+              onBlur={doneEdit} onKeyDown={e => { if (e.key === "Enter") doneEdit(); if (e.key === "Escape") setEditing(false); }}
+              style={{ width: 70, fontSize: 15, fontWeight: 700, color: "#c23b3b", background: "rgba(194,59,59,.08)", border: "1px solid #c23b3b", borderRadius: 4, padding: "2px 5px", outline: "none" }} />
+          ) : (
+            <div style={{ fontSize: 17, fontWeight: 700, color: ov ? "#c23b3b" : c }}>{fmt(displayVal)}</div>
+          )}
           {mg && <div style={{ fontSize: 9, color: S.muted, fontWeight: 600 }}>{mg}</div>}
         </div>
+        {ov && <span onClick={e => { e.stopPropagation(); onClearOverride(overrideKey); }} style={{ display: "block", marginTop: 2, fontSize: 9, color: "#c23b3b", textDecoration: "underline", cursor: "pointer" }}>↺ revert</span>}
+        {canEdit && !editing && <span onClick={startEdit} title="Edit price" style={{ position: "absolute", top: 4, right: 5, fontSize: 10, color: S.muted, cursor: "pointer", padding: 2 }}>✎</span>}
       </div>
     );
   }
@@ -729,11 +762,11 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     // -- margin on each cell uses that district's own landed cost, so West
     // cells never get margin computed off East's (or vice versa).
     const collapsedCells = [];
-    if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green, cellCost: wCostR.cost });
-    if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green, cellCost: eCostR.cost });
+    if (wTargetVal != null) collapsedCells.push({ k: "w_target", l: "W TX Target" + (wTargetIsNat ? " (Nat)" : ""), v: wTargetVal, c: wTargetIsNat ? S.blue : S.green, cellCost: wCostR.cost, dbTier: "target", dbDist: "wtx", isNat: wTargetIsNat });
+    if (eTargetVal != null) collapsedCells.push({ k: "e_target", l: "E TX Target" + (eTargetIsNat ? " (Nat)" : ""), v: eTargetVal, c: eTargetIsNat ? S.blue : S.green, cellCost: eCostR.cost, dbTier: "target", dbDist: "etx", isNat: eTargetIsNat });
     const expandedCells = [];
-    if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber, cellCost: wCostR.cost });
-    if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber, cellCost: eCostR.cost });
+    if (wFloorVal != null) expandedCells.push({ k: "w_floor", l: "W TX Floor" + (wTargetIsNat ? " (Nat)" : ""), v: wFloorVal, c: S.amber, cellCost: wCostR.cost, dbTier: "floor", dbDist: "wtx", isNat: wTargetIsNat });
+    if (eFloorVal != null) expandedCells.push({ k: "e_floor", l: "E TX Floor" + (eTargetIsNat ? " (Nat)" : ""), v: eFloorVal, c: S.amber, cellCost: eCostR.cost, dbTier: "floor", dbDist: "etx", isNat: eTargetIsNat });
 
     // Location overrides: own grid below district pricing, target row then floor row
     // Rio Hondo and Lonestar are both East TX branches.
@@ -750,12 +783,35 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
     // Wholesale as clickable price cell -- no district of its own, so it
     // uses the viewing admin/manager's home district's landed cost.
     const wsCells = [];
-    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: wholesaleBasis(p), c: S.purple, cellCost: homeCostR.cost });
+    // dbDist tags Wholesale with whichever district the admin was viewing
+    // when they edited it (same "home district" convention Wholesale's own
+    // cost/margin already uses just above) -- Wholesale itself has no real
+    // per-district column in the DB, this is purely so the Frank Moore
+    // email can say which district context the edit was made under.
+    if (p.wholesale != null && p.wholesale > 0) wsCells.push({ k: "ws", l: "Wholesale", v: wholesaleBasis(p), c: S.purple, cellCost: homeCostR.cost, dbTier: "wholesale", dbDist: district === "wtx" ? "wtx" : "etx", isNat: false });
+
+    // Commits an edited price -- floor and target stay synced automatically
+    // (floor = target * 0.95, Nathan's rule, same as everywhere else this
+    // rule is enforced), both written through the one shared setPricingOverride.
+    function commitPriceEdit(cell, newPrice) {
+      if (!cell.dbTier || !setPricingOverride) return;
+      const meta = { item: p.item, productName: p.name, pkg: p.pkg, dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit };
+      setPricingOverride(meta, cell.dbTier, cell.dbDist, cell.isNat, newPrice);
+      if (cell.dbTier === "target" || cell.dbTier === "floor") {
+        const counterpartTier = cell.dbTier === "target" ? "floor" : "target";
+        const counterpartPrice = cell.dbTier === "target" ? newPrice * 0.95 : newPrice / 0.95;
+        setPricingOverride(meta, counterpartTier, cell.dbDist, cell.isNat, counterpartPrice);
+      }
+    }
 
     const adminSel = useFloor || (collapsedCells[0]?.k || "w_target");
     const allAdminCells = [...collapsedCells, ...expandedCells, ...locTargetCells, ...locFloorCells, ...wsCells];
     const selCell = allAdminCells.find(c => c.k === adminSel) || allAdminCells[0];
-    const adminPrice = selCell?.v;
+    // Price Per Acre must reflect a pending edit too (2026-10-27 fix -- Nathan
+    // caught this showing the stale catalog price after editing E TX Floor),
+    // same override-key shape PriceCell itself checks.
+    const selOv = (selCell?.dbTier && pricingOverrides) ? pricingOverrides[p.item + "|" + selCell.dbTier + "|" + (selCell.dbDist || "any")] : null;
+    const adminPrice = selOv ? selOv.newPrice : selCell?.v;
     const adminPriceLabel = selCell?.l || "Target";
     const rateStr = p.rate_min != null && p.rate_unit ? (p.rate_min === p.rate_max ? p.rate_min + " " + p.rate_unit : p.rate_min + "-" + p.rate_max + " " + p.rate_unit) : null;
 
@@ -775,20 +831,20 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
         </div>
         {collapsedCells.length > 0 && (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(collapsedCells.length, 2) + ",1fr)", gap: 1, background: S.border, margin: "0 12px 10px", borderRadius: 6, overflow: "hidden" }}>
-            {collapsedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+            {collapsedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} isAdmin={isAdmin} pricingOverrides={pricingOverrides} onCommit={commitPriceEdit} onClearOverride={clearPricingOverride} />)}
           </div>
         )}
         {open && (
           <div style={{ padding: "0 12px 10px", borderTop: "1px solid " + S.border }}>
             {expandedCells.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(expandedCells.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-                {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+                {expandedCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} isAdmin={isAdmin} pricingOverrides={pricingOverrides} onCommit={commitPriceEdit} onClearOverride={clearPricingOverride} />)}
               </div>
             )}
             {locKeys.length > 0 && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(" + Math.min(locKeys.length, 2) + ",1fr)", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
-                {locTargetCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
-                {locFloorCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+                {locTargetCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} isAdmin={isAdmin} pricingOverrides={pricingOverrides} onCommit={commitPriceEdit} onClearOverride={clearPricingOverride} />)}
+                {locFloorCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} isAdmin={isAdmin} pricingOverrides={pricingOverrides} onCommit={commitPriceEdit} onClearOverride={clearPricingOverride} />)}
               </div>
             )}
             <div style={{ display: "grid", gridTemplateColumns: (!hideCost && wsCells.length > 0) ? "1fr 1fr" : "1fr", gap: 1, background: S.border, borderRadius: 6, overflow: "hidden", marginTop: 8 }}>
@@ -796,7 +852,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
                 <div style={{ fontSize: 8, color: S.muted, textTransform: "uppercase", letterSpacing: .8, marginBottom: 2 }}>Cost <span style={{ color: homeCostR.source === "Landed" ? S.blue : S.muted, textTransform: "none" }}>· {homeCostR.source}</span></div>
                 <div style={{ fontSize: 17, fontWeight: 700, color: S.text }}>{fmt(homeCostR.cost)}</div>
               </div>}
-              {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} />)}
+              {wsCells.map(c => <PriceCell key={c.k} {...c} sel={adminSel} onSel={setUseFloor} showMargin={!hideCost} isAdmin={isAdmin} pricingOverrides={pricingOverrides} onCommit={commitPriceEdit} onClearOverride={clearPricingOverride} />)}
             </div>
             {renderPPA(bidPrice != null ? bidPrice : adminPrice, bidPrice != null ? "Bid Price" : adminPriceLabel)}
             {(rateStr || p.rate_note) && <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "5px 9px", marginTop: 8 }}><span style={{ fontSize: 11, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span></div>}
@@ -2536,6 +2592,12 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const [vaGalRaw, setVaGalRaw] = useState({});
   const [vaPrices, setVaPrices] = useState({});
   const [vaPkgOverride, setVaPkgOverride] = useState({});
+  // Sub-tab inside the Calc mode: "blend" is everything above (unchanged),
+  // "cp" is the new CP/Branded Pairing Calculator (2026-10-22). Lives in its
+  // own top-level component (CPPairingCalculator, defined right after this
+  // one) so it can hold its own state cleanly -- this toggle just decides
+  // which one renders, both sharing the same District/Location picker above.
+  const [calcView, setCalcView] = useState("blend");
 
   const onVaPkgChange = (matchName, pkg) => {
     setVaPkgOverride(prev => ({ ...prev, [matchName]: pkg }));
@@ -2830,6 +2892,18 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   return (
     <div style={{ padding: "10px 12px 150px" }}>
 
+      {/* CALC sub-tabs: Blend Calculator (everything below, unchanged) vs. the
+          new CP/Branded Pairing Calculator. Both share the District/Location
+          picker just below, so it stays outside this toggle. */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12, background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, padding: 4 }}>
+        {[{ key: "blend", label: "⚡ Blend Calculator" }, { key: "cp", label: "🧬 CP Pairing Calculator" }].map(t => (
+          <button key={t.key} onClick={() => { setCalcView(t.key); Analytics.track("page_view", { calc_view: t.key }); }}
+            style={{ flex: 1, fontSize: 11, fontWeight: 700, color: calcView === t.key ? S.onAccent : S.muted, background: calcView === t.key ? S.amber : "transparent", border: "none", borderRadius: 6, padding: "8px 10px", cursor: "pointer", letterSpacing: .3 }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* DISTRICT -- admins get a toggle (no district/location of their own to
           resolve against); everyone else just sees their own district/location
           confirmed, pulled from resolvePrice via effectiveDistrict/effectiveLocation. */}
@@ -2879,6 +2953,10 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
           Value-Add pricing: <span style={{ fontWeight: 700, color: S.text }}>{activeLocation ? (locations.find(l => l.id === activeLocation)?.name || (effectiveDistrict === "wtx" ? "West TX" : "East TX")) : (effectiveDistrict === "wtx" ? "West TX" : "East TX")}</span>
         </div>
       )}
+
+      {calcView === "cp" ? (
+        <CPPairingCalculator activeLocation={activeLocation} locations={locations} txData={txData} isAdmin={isAdmin} district={effectiveDistrict} overridesMap={overridesMap} hideCost={hideCost} />
+      ) : (<React.Fragment>
 
       {/* COMMODITY */}
       <div style={sectionStyle}>
@@ -3185,6 +3263,536 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
           </div>
         </div>
       )}
+      </React.Fragment>)}
+    </div>
+  );
+}
+
+// ═══ CP / BRANDED PAIRING CALCULATOR ═══
+// Added 2026-10-22, per Nathan: a location-locked list of his top CP
+// (crop-protection) products paired with whichever Branded adjuvant
+// products he's chosen for them, so a rep can do the exact same
+// qty/rate/GPA → gallons-needed math as the Blend Calculator above, but for
+// CP + Branded tank mixes instead of a fertilizer blend truck.
+//
+// Data model (two new Supabase tables, see Price Updates/cp_pairings_setup.sql):
+//   cp_pairings(id, location_id, season, cp_product, qty_unit, rate_min,
+//     rate_max, default_qty, default_gpa, label_rate, sort_order)
+//   cp_pairing_branded(id, cp_pairing_id, sku_item, sort_order)
+// Branded partners are NOT duplicated into their own rate columns -- they
+// reference `sku_item` and read rate_min/rate_max/rate_unit live off txData,
+// same source of truth as every other price/rate in this tool.
+//
+// Deliberately locked, not auto-recomputed: Nathan picks which CP products
+// to track per location (informed by the separate CP+Branded Pairing
+// dashboard's attachment-rate data, a totally different file/process) and
+// that list stays fixed until he edits it again next season -- there is no
+// code path here that silently reshuffles it off fresh sales data.
+//
+// The CP product's own Rate UOM is picked by Nathan per product -- added
+// 2026-10-26. The original version hardcoded it off qty_unit alone, which
+// silently assumed every gal-packaged CP active is rated fl oz/ac and every
+// lb-packaged one is rated oz/ac. Real labels vary -- qt/ac, pt/ac, gal/ac,
+// and straight lb/ac are all common too -- so it's now a real picker,
+// constrained to units cpAcresForProduct() below actually knows how to
+// convert (an unparseable free-text unit would silently break the math).
+const CP_RATE_UNITS = ["fl oz/ac", "qt/ac", "pt/ac", "gal/ac", "oz/ac", "lb/ac"];
+
+// Converts (qty purchased, in qty_unit) + (rate, in rateUnit) into acres
+// treated -- the CP-product-side equivalent of cpPartnerQtyPerAcre below,
+// just inverted (quantity+rate -> acres instead of acres -> quantity).
+// qty_unit "gal" assumes a liquid product (total fl oz = qty*128, total qt =
+// qty*4, total pt = qty*8); qty_unit "lb" assumes dry/by-weight (total oz =
+// qty*16). All six CP_RATE_UNITS values are covered; an unrecognized pairing
+// (e.g. "lb/ac" rate on a "gal" product) returns 0 rather than a nonsense
+// number.
+function cpAcresForProduct(qty, qtyUnit, rate, rateUnit) {
+  if (!(qty > 0) || !(rate > 0) || !rateUnit) return 0;
+  const u = rateUnit.toLowerCase();
+  if (qtyUnit === "lb") {
+    if (u.indexOf("lb") !== -1) return qty / rate;
+    if (u.indexOf("oz") !== -1) return (qty * 16) / rate;
+    return 0;
+  }
+  if (u.indexOf("oz") !== -1) return (qty * 128) / rate;
+  if (u.indexOf("qt") !== -1) return (qty * 4) / rate;
+  if (u.indexOf("pt") !== -1) return (qty * 8) / rate;
+  if (u.indexOf("gal") !== -1) return qty / rate;
+  return 0;
+}
+
+// Mirrors calcPPA's unit parsing (see top of file) but returns a quantity
+// (gal or lb of BRANDED PARTNER needed per acre), not a price -- the two
+// are the same underlying unit-conversion logic, just stopped one step
+// earlier. Liquid branch only (upg lookup) plus the dry/by-weight branch
+// for a lb-packaged partner rated e.g. "lb/100gal" (same CUT-RATE-style
+// convention calcPPA already handles) -- every other branded adjuvant in
+// this catalog is liquid.
+function cpPartnerQtyPerAcre(p, sprayVolGPA) {
+  if (!p || p.rate_min == null || !p.rate_unit) return null;
+  const u = p.rate_unit.toLowerCase();
+  const per100 = u.indexOf("/100") !== -1;
+  const carrierFactor = per100 ? (sprayVolGPA / 100) : 1;
+  const isDry = p.pkg && /\d+\s*LB/i.test(p.pkg);
+  if (isDry) {
+    if (u.indexOf("lb") !== -1) return { qty: p.rate_min * carrierFactor, unit: "lb" };
+    if (u.indexOf("oz") !== -1) return { qty: (p.rate_min / 16) * carrierFactor, unit: "lb" };
+    return null;
+  }
+  const upg = u.indexOf("qt") !== -1 ? 4 : u.indexOf("pt") !== -1 ? 8 : u.indexOf("oz") !== -1 ? 128 : u.indexOf("gal") !== -1 ? 1 : 128;
+  return { qty: (p.rate_min / upg) * carrierFactor, unit: "gal" };
+}
+
+function fmtQty(n) { return new Intl.NumberFormat("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(n); }
+
+// Floating "click the rate to edit it, bounded by the label range" popover --
+// same UX as the standalone CP Pairing Calculator, re-implemented in React
+// (single shared popover instance rather than one DOM node per pill, so a
+// re-render never fights the open editor for focus).
+// Single-rate popover (2026-10-26 redesign, per Nathan: "only allow one
+// rate" -- a Branded partner's txData rate_min/rate_max is the real label
+// RANGE, shown here as reference text only; the rep/admin always sets one
+// working point within it, never a sub-range, so every downstream
+// quantity/profit number is a single figure instead of a min-max spread.
+function CPRatePopover({ editing, onClose, onChange, onReset }) {
+  if (!editing) return null;
+  const { label, rate, boundMin, boundMax, unit, rect } = editing;
+  const isLocked = boundMin === boundMax;
+  const left = Math.max(12, Math.min(rect.left, window.innerWidth - 242));
+  const top = (rect.bottom + 150 > window.innerHeight) ? rect.top - 150 : rect.bottom + 8;
+  return (
+    <div style={{ position: "fixed", left, top: Math.max(12, top), zIndex: 200, width: 230, background: S.card, border: "1px solid " + S.border, borderRadius: 14, boxShadow: "0 22px 60px rgba(0,0,0,.35)", padding: "14px 16px 12px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
+        <strong style={{ fontSize: 15 }}>{label}</strong>
+        <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 18, lineHeight: 1, color: S.muted, cursor: "pointer" }}>&times;</button>
+      </div>
+      <p style={{ margin: "0 0 10px", fontSize: 11, color: S.muted }}>
+        {isLocked ? "Fixed rate: " + boundMin + " " + unit + " — not adjustable" : "Label range: " + boundMin + "–" + boundMax + " " + unit}
+      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
+        <input type="number" step="any" inputMode="decimal" value={rate} disabled={isLocked}
+          onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+          onChange={e => onChange(Number(e.target.value), false)}
+          onBlur={e => onChange(clampNum(Number(e.target.value), boundMin, boundMax), true)}
+          style={{ width: 0, flex: 1, border: "1px solid " + S.border, borderRadius: 8, padding: "7px 6px", font: "inherit", fontSize: 15, fontWeight: 700, textAlign: "center", outline: "none", background: S.inputBg, color: S.text }} />
+        <span style={{ color: S.muted, fontSize: 12, whiteSpace: "nowrap" }}>{unit}</span>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button onClick={onReset} style={{ border: "none", background: "transparent", color: S.green, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Reset to default</button>
+      </div>
+    </div>
+  );
+}
+function clampNum(n, lo, hi) { return Math.min(Math.max(n, lo), hi); }
+
+function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, district, overridesMap, hideCost }) {
+  const [pairings, setPairings] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [showManage, setShowManage] = useState(false);
+
+  // Per-CP-product working state, keyed by cp_pairings.id.
+  const [qty, setQty] = useState({});
+  const [rate, setRate] = useState({});
+  const [gpa, setGpa] = useState({});
+  // Branded-partner rate overrides, keyed "cpPairingId|skuItem" -> a single
+  // number (session-local; an admin's edit also persists to
+  // cp_pairing_branded.default_rate below so it sticks for everyone next
+  // time, same "locked until changed" philosophy as the CP product side).
+  const [partnerOverrides, setPartnerOverrides] = useState({});
+  const [editing, setEditing] = useState(null); // CPRatePopover target
+
+  async function loadPairings() {
+    if (!activeLocation) { setPairings([]); setLoading(false); return; }
+    setLoading(true); setLoadError("");
+    const { data, error } = await supabaseClient
+      .from("cp_pairings")
+      .select("*, cp_pairing_branded(*)")
+      .eq("location_id", activeLocation)
+      .order("sort_order", { ascending: true });
+    if (error) { setLoadError(error.message); setPairings([]); }
+    else setPairings(data || []);
+    setLoading(false);
+  }
+  useEffect(() => { loadPairings(); }, [activeLocation]);
+
+  function qtyFor(row) { return qty[row.id] !== undefined ? qty[row.id] : String(row.default_qty); }
+  function rateFor(row) { return rate[row.id] !== undefined ? rate[row.id] : String(row.rate_min === row.rate_max ? row.rate_min : (row.rate_min + row.rate_max) / 2); }
+  function gpaFor(row) { return gpa[row.id] !== undefined ? gpa[row.id] : String(row.default_gpa); }
+
+  function openEditor(e, row, partner, curRate) {
+    const key = row.id + "|" + partner.sku_item;
+    setEditing({
+      key, bpId: partner.bpId, label: partner.name, rate: curRate,
+      boundMin: partner.rate_min, boundMax: partner.rate_max, unit: partner.rate_unit,
+      rect: e.currentTarget.getBoundingClientRect(),
+    });
+  }
+  function changeEditor(newRate, commit) {
+    setEditing(prev => prev && ({ ...prev, rate: newRate }));
+    if (!editing) return;
+    setPartnerOverrides(prev => ({ ...prev, [editing.key]: newRate }));
+    // An admin's committed edit also persists as the location's new default
+    // (sticks for every rep next time, not just this session) -- a
+    // non-admin's edit stays local-only (and would be rejected by RLS
+    // anyway if it tried to write).
+    if (commit && isAdmin && editing.bpId) {
+      supabaseClient.from("cp_pairing_branded").update({ default_rate: newRate }).eq("id", editing.bpId).then(({ error }) => {
+        if (!error) setPairings(prev => prev.map(r => ({
+          ...r, cp_pairing_branded: (r.cp_pairing_branded || []).map(b => b.id === editing.bpId ? { ...b, default_rate: newRate } : b)
+        })));
+      });
+    }
+  }
+  function resetEditor() {
+    if (!editing) return;
+    setPartnerOverrides(prev => { const n = { ...prev }; delete n[editing.key]; return n; });
+    if (isAdmin && editing.bpId) {
+      supabaseClient.from("cp_pairing_branded").update({ default_rate: null }).eq("id", editing.bpId).then(({ error }) => {
+        if (!error) setPairings(prev => prev.map(r => ({
+          ...r, cp_pairing_branded: (r.cp_pairing_branded || []).map(b => b.id === editing.bpId ? { ...b, default_rate: null } : b)
+        })));
+      });
+    }
+    setEditing(null);
+  }
+
+  if (!activeLocation) {
+    return <div style={{ padding: "30px 10px", textAlign: "center", color: S.muted, fontSize: 13 }}>Pick a location above to see its CP Pairing Calculator.</div>;
+  }
+  if (loading) return <div style={{ padding: "30px 10px", textAlign: "center", color: S.muted, fontSize: 13 }}>Loading…</div>;
+  if (loadError) return <div style={{ padding: "30px 10px", textAlign: "center", color: "#ef4444", fontSize: 13 }}>Couldn't load CP pairings: {loadError}</div>;
+
+  const locName = locations.find(l => l.id === activeLocation)?.name || activeLocation;
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>
+          {locName}'s CP Products {pairings.length > 0 ? "(" + pairings.length + ")" : ""}
+        </div>
+        {isAdmin && (
+          <button onClick={() => setShowManage(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+            ⚙️ Manage Pairings
+          </button>
+        )}
+      </div>
+
+      {pairings.length === 0 && (
+        <div style={{ padding: "40px 10px", textAlign: "center", color: S.muted, fontSize: 13 }}>
+          No CP products locked in for {locName} yet.{isAdmin ? " Click \"Manage Pairings\" to add some." : " Ask your manager to set these up."}
+        </div>
+      )}
+
+      {pairings.map(row => {
+        const q = parseFloat(qtyFor(row)) || 0;
+        const r = parseFloat(rateFor(row)) || 0;
+        const g = parseFloat(gpaFor(row)) || 0;
+        const acres = cpAcresForProduct(q, row.qty_unit, r, row.rate_unit);
+        const finished = acres * g;
+        const branded = (row.cp_pairing_branded || []).slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+        return (
+          <div key={row.id} style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 16, marginBottom: 14, overflow: "hidden", boxShadow: "0 6px 20px rgba(0,0,0,.16)" }}>
+            <div style={{ padding: "13px 16px", fontSize: 15, fontWeight: 800, color: "#fff", background: "linear-gradient(135deg,#1e4a2c,#2d6b3f)", letterSpacing: .2 }}>
+              {row.cp_product}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(230px,320px) 1fr" }}>
+
+              {/* LEFT: application inputs for the CP product itself */}
+              <div style={{ padding: 16, borderRight: "1px solid " + S.border }}>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+                  <div>
+                    <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Quantity</label>
+                    <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
+                      <input type="number" min="0" step="any" inputMode="decimal" value={qtyFor(row)}
+                        onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+                        onChange={e => setQty(prev => ({ ...prev, [row.id]: e.target.value }))}
+                        style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
+                      <span style={{ padding: "0 10px", fontSize: 11, color: S.muted }}>{row.qty_unit}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Rate (UOM)</label>
+                    <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
+                      <input type="number" min="0" step="any" inputMode="decimal" value={rateFor(row)}
+                        onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+                        onChange={e => setRate(prev => ({ ...prev, [row.id]: e.target.value }))}
+                        style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
+                      <span style={{ padding: "0 10px", fontSize: 11, color: S.muted, whiteSpace: "nowrap" }}>{row.rate_unit}</span>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Spray Volume</label>
+                  <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
+                    <input type="number" min="0" step="any" inputMode="decimal" value={gpaFor(row)}
+                      onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+                      onChange={e => setGpa(prev => ({ ...prev, [row.id]: e.target.value }))}
+                      style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
+                    <span style={{ padding: "0 10px", fontSize: 11, color: S.muted }}>gal/ac</span>
+                  </div>
+                </div>
+                <div style={{ background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.3)", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.amber, marginBottom: 2 }}>Acres Treated</div>
+                  {acres > 0 ? (<React.Fragment>
+                    <div style={{ fontSize: 22, fontWeight: 800, color: S.text, lineHeight: 1 }}>{acres.toFixed(1)}</div>
+                    <div style={{ fontSize: 11, color: S.muted, marginTop: 4 }}>{fmtQty(finished)} gal finished spray</div>
+                  </React.Fragment>) : (
+                    <div style={{ fontSize: 12, color: S.muted }}>Enter quantity &amp; rate</div>
+                  )}
+                </div>
+              </div>
+
+              {/* RIGHT: paired Branded products */}
+              <div style={{ padding: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, alignContent: "start" }}>
+                {branded.length === 0 && (
+                  <div style={{ fontSize: 12, color: S.muted, gridColumn: "1/-1" }}>
+                    No Branded products paired with {row.cp_product} yet.{isAdmin ? " Add some via Manage Pairings." : ""}
+                  </div>
+                )}
+                {branded.map(bp => {
+                  const p = txData.find(x => String(x.item) === String(bp.sku_item));
+                  const name = p?.name || bp.sku_item;
+                  const rateUnit = p?.rate_unit || "";
+                  const key = row.id + "|" + bp.sku_item;
+                  const ov = partnerOverrides[key];
+                  // One working rate only (2026-10-26, per Nathan) -- never a
+                  // sub-range. Falls back to the locked default_rate an admin
+                  // set (persists for everyone), then to the midpoint of the
+                  // real label range if nobody's set one yet.
+                  const midpoint = (p && p.rate_min != null && p.rate_max != null) ? (p.rate_min + p.rate_max) / 2 : null;
+                  const curRate = ov != null ? ov : (bp.default_rate != null ? bp.default_rate : midpoint);
+                  const overridden = p && curRate != null && bp.default_rate != null && curRate !== midpoint;
+                  const needed = (p && curRate != null && acres > 0) ? cpPartnerQtyPerAcre({ ...p, rate_min: curRate }, g) : null;
+                  const totalQty = needed ? needed.qty * acres : null;
+                  // Profit per pairing -- reuses the app's own resolvePrice()
+                  // (same district/location/override cascade every other
+                  // price in this app goes through) against the Branded
+                  // partner's real cost. Skipped for a dry_oz_price product
+                  // (EMPLOY-style) since that needs calcPPA's oz_per_unit
+                  // basis conversion, not a flat price-minus-cost -- no real
+                  // CP-paired Branded product is dry_oz_price today, so this
+                  // is a deliberate "don't silently guess" gap, not an
+                  // oversight. Always shown -- Nathan wants reps to see which
+                  // pairings make more money, even though they never see
+                  // raw cost figures anywhere else in the app.
+                  const priced = (p && !p.dry_oz_price) ? resolvePrice(p, district, activeLocation, overridesMap) : null;
+                  const sellPrice = priced ? (priced.target != null ? priced.target : priced.floor) : null;
+                  const profit = (sellPrice != null && totalQty != null) ? (sellPrice - (p.cost || 0)) * totalQty : null;
+                  return (
+                    <div key={bp.id} style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 10, padding: "10px 12px" }}>
+                      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: S.text }}>
+                        {name}{p?.pkg ? <span style={{ fontWeight: 600, color: S.muted }}> · {p.pkg}</span> : null}
+                      </div>
+                      {p && curRate != null ? (
+                        <React.Fragment>
+                          <button onClick={e => openEditor(e, row, { sku_item: bp.sku_item, bpId: bp.id, name, rate_min: p.rate_min, rate_max: p.rate_max, rate_unit: rateUnit }, curRate)}
+                            style={{ fontSize: 10, fontWeight: 800, letterSpacing: .3, border: "none", borderRadius: 999, padding: "3px 8px", cursor: "pointer", background: overridden ? S.amber : "rgba(76,175,106,.14)", color: overridden ? S.onAccent : S.green }}>
+                            {fmtQty(curRate).replace(/\.00$/, "") + " " + rateUnit}
+                          </button>
+                          {/* Same label-rate pill used throughout Pricing (ProductCard's
+                              rateStr + rate_note, 🌿 amber pill) -- reused here verbatim
+                              rather than reinvented, per Nathan. */}
+                          {(() => {
+                            const rateStr = p.rate_min != null ? (p.rate_min === p.rate_max ? p.rate_min + " " + rateUnit : p.rate_min + "-" + p.rate_max + " " + rateUnit) : null;
+                            return (rateStr || p.rate_note) ? (
+                              <div style={{ display: "inline-flex", alignItems: "center", background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.25)", borderRadius: 6, padding: "4px 8px", marginTop: 6 }}>
+                                <span style={{ fontSize: 10, color: S.amber }}>🌿 {rateStr || ""}{rateStr && p.rate_note ? " · " : ""}{p.rate_note || ""}</span>
+                              </div>
+                            ) : null;
+                          })()}
+                        </React.Fragment>
+                      ) : (
+                        <div style={{ fontSize: 10, color: S.muted }}>No rate data</div>
+                      )}
+                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginTop: 9, marginBottom: 2 }}>Needed</div>
+                      <div style={{ fontSize: 18, fontWeight: 800, color: S.text }}>
+                        {totalQty != null ? fmtQty(totalQty) + " " + needed.unit : "—"}
+                      </div>
+                      <div style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginTop: 9, marginBottom: 2 }}>Profit</div>
+                      <div style={{ fontSize: 15, fontWeight: 800, color: profit == null ? S.muted : (profit >= 0 ? S.green : "#ef4444") }}>
+                        {profit != null ? "$" + fmtQty(profit) : "—"}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+            </div>
+          </div>
+        );
+      })}
+
+      <CPRatePopover editing={editing} onClose={() => setEditing(null)} onChange={changeEditor} onReset={resetEditor} />
+
+      {showManage && (
+        <ManageCPPairings
+          activeLocation={activeLocation} locName={locName} txData={txData}
+          pairings={pairings} onClose={() => setShowManage(false)} onSaved={loadPairings} />
+      )}
+    </div>
+  );
+}
+
+function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, onSaved }) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newQtyUnit, setNewQtyUnit] = useState("gal");
+  const [newRateUnit, setNewRateUnit] = useState("fl oz/ac");
+  const [newRateMin, setNewRateMin] = useState("");
+  const [newRateMax, setNewRateMax] = useState("");
+  const [newDefaultQty, setNewDefaultQty] = useState("270");
+  const [newDefaultGpa, setNewDefaultGpa] = useState("10");
+  const [newLabelRate, setNewLabelRate] = useState("");
+  const [saveErr, setSaveErr] = useState("");
+  const [partnerSearch, setPartnerSearch] = useState({}); // cp_pairing_id -> search text
+
+  async function addCpProduct() {
+    setSaveErr("");
+    const rMin = parseFloat(newRateMin), rMax = parseFloat(newRateMax || newRateMin);
+    if (!newName.trim() || !Number.isFinite(rMin)) { setSaveErr("Enter a product name and a rate."); return; }
+    const { error } = await supabaseClient.from("cp_pairings").insert({
+      location_id: activeLocation, cp_product: newName.trim(), qty_unit: newQtyUnit, rate_unit: newRateUnit,
+      rate_min: rMin, rate_max: Number.isFinite(rMax) ? rMax : rMin,
+      default_qty: parseFloat(newDefaultQty) || 270, default_gpa: parseFloat(newDefaultGpa) || 10,
+      label_rate: newLabelRate.trim() || null, sort_order: pairings.length,
+    });
+    if (error) { setSaveErr(error.message); return; }
+    setNewName(""); setNewRateMin(""); setNewRateMax(""); setNewLabelRate(""); setAdding(false);
+    onSaved();
+  }
+
+  async function removeCpProduct(id) {
+    if (!window.confirm("Remove this CP product and its paired Branded products for " + locName + "?")) return;
+    setSaveErr("");
+    const { error } = await supabaseClient.from("cp_pairings").delete().eq("id", id);
+    if (error) { setSaveErr(error.message); return; }
+    onSaved();
+  }
+
+  // Every write below now surfaces its error into saveErr instead of failing
+  // silently (2026-10-26 fix -- Nathan reported adding a Branded partner
+  // "doesn't do anything", and none of these calls were checking `error` at
+  // all, so a rejected write -- RLS, a bad sku_item, anything -- looked
+  // identical to a successful no-op from the UI's point of view).
+  async function addBrandedPartner(cpPairingId, p) {
+    setSaveErr("");
+    const existing = pairings.find(r => r.id === cpPairingId)?.cp_pairing_branded || [];
+    const { error } = await supabaseClient.from("cp_pairing_branded").insert({ cp_pairing_id: cpPairingId, sku_item: p.item, sort_order: existing.length });
+    if (error) { setSaveErr(error.message); return; }
+    setPartnerSearch(prev => ({ ...prev, [cpPairingId]: "" }));
+    onSaved();
+  }
+
+  async function removeBrandedPartner(id) {
+    setSaveErr("");
+    const { error } = await supabaseClient.from("cp_pairing_branded").delete().eq("id", id);
+    if (error) { setSaveErr(error.message); return; }
+    onSaved();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "40px 14px" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(640px,100%)", background: S.card, border: "1px solid " + S.border, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <strong style={{ fontSize: 15 }}>Manage CP Pairings — {locName}</strong>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 20, color: S.muted, cursor: "pointer" }}>&times;</button>
+        </div>
+        <p style={{ fontSize: 11, color: S.muted, margin: "0 0 14px" }}>
+          This list is locked for the season — it won't change until you edit it here again, no matter what the sales data does.
+        </p>
+        {saveErr && <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 }}>{saveErr}</div>}
+
+        {pairings.map(row => {
+          const search = partnerSearch[row.id] || "";
+          const results = search.trim().length >= 2
+            ? txData.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).slice(0, 8)
+            : [];
+          return (
+            <div key={row.id} style={{ border: "1px solid " + S.border, borderRadius: 10, padding: 12, marginBottom: 10 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                <div>
+                  <strong style={{ fontSize: 13 }}>{row.cp_product}</strong>
+                  <span style={{ fontSize: 11, color: S.muted, marginLeft: 8 }}>
+                    {row.rate_min === row.rate_max ? row.rate_min : row.rate_min + "–" + row.rate_max} {row.rate_unit}
+                  </span>
+                </div>
+                <button onClick={() => removeCpProduct(row.id)} style={{ border: "none", background: "transparent", color: "#ef4444", fontSize: 11, cursor: "pointer" }}>Remove</button>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {(row.cp_pairing_branded || []).map(bp => {
+                  const p = txData.find(x => String(x.item) === String(bp.sku_item));
+                  return (
+                    <span key={bp.id} style={{ fontSize: 11, background: S.tag, border: "1px solid " + S.border, borderRadius: 999, padding: "3px 8px", display: "flex", alignItems: "center", gap: 5 }}>
+                      {p?.name || bp.sku_item}{p?.pkg ? <span style={{ color: S.muted }}>· {p.pkg}</span> : null}
+                      <span onClick={() => removeBrandedPartner(bp.id)} style={{ cursor: "pointer", color: S.muted }}>&times;</span>
+                    </span>
+                  );
+                })}
+              </div>
+              <div style={{ position: "relative" }}>
+                <input type="search" placeholder="+ Add Branded partner (type to search)..." value={search}
+                  onChange={e => setPartnerSearch(prev => ({ ...prev, [row.id]: e.target.value }))}
+                  style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "7px 10px", outline: "none", boxSizing: "border-box" }} />
+                {results.length > 0 && (
+                  <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 10, background: S.card, border: "1px solid " + S.border, borderRadius: 8, maxHeight: 220, overflowY: "auto", boxShadow: "0 8px 24px rgba(0,0,0,.4)" }}>
+                    {results.map(p => (
+                      <div key={p.item} onClick={() => addBrandedPartner(row.id, p)}
+                        style={{ padding: "8px 10px", cursor: "pointer", borderBottom: "1px solid " + S.border }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{p.name}</div>
+                        <div style={{ fontSize: 10.5, color: S.muted, marginTop: 1 }}>
+                          {p.pkg ? p.pkg + " · " : ""}#{p.item}{p.rate_min != null ? " · " + p.rate_min + (p.rate_max !== p.rate_min ? "–" + p.rate_max : "") + " " + p.rate_unit : " · no rate data"}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+
+        <div style={{ borderTop: "1px solid " + S.border, paddingTop: 12, marginTop: 4 }}>
+          {!adding ? (
+            <button onClick={() => setAdding(true)} style={{ fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>+ Add CP Product</button>
+          ) : (
+            <div>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 8, marginBottom: 8 }}>
+                <input placeholder="CP product name (e.g. Roundup PowerMax 3)" value={newName} onChange={e => setNewName(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }} />
+                <select value={newQtyUnit} onChange={e => setNewQtyUnit(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }}>
+                  <option value="gal">Liquid (gal, rated fl oz/ac)</option>
+                  <option value="lb">Dry (lb, rated oz wt/ac)</option>
+                </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1.2fr", gap: 8, marginBottom: 8 }}>
+                <input placeholder="Rate min" type="number" value={newRateMin} onChange={e => setNewRateMin(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }} />
+                <input placeholder="Rate max (optional)" type="number" value={newRateMax} onChange={e => setNewRateMax(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }} />
+                <select value={newRateUnit} onChange={e => setNewRateUnit(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }}>
+                  {CP_RATE_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+                </select>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                <input placeholder="Default qty" type="number" value={newDefaultQty} onChange={e => setNewDefaultQty(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }} />
+                <input placeholder="Default GPA" type="number" value={newDefaultGpa} onChange={e => setNewDefaultGpa(e.target.value)}
+                  style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none" }} />
+              </div>
+              <input placeholder="Label rate note (optional, e.g. source/context)" value={newLabelRate} onChange={e => setNewLabelRate(e.target.value)}
+                style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
+              {saveErr && <div style={{ color: "#ef4444", fontSize: 11, marginBottom: 8 }}>{saveErr}</div>}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={addCpProduct} style={{ fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>Save</button>
+                <button onClick={() => setAdding(false)} style={{ fontSize: 12, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -3257,6 +3865,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // ── Price dial-in (local what-if edits, never auto-written to Supabase) ──
   const [priceOverrides, setPriceOverrides] = useState({}); // key: "item|tier|dist" -> {item, productName, pkg, tier, dist, isNat, newPrice, originalPrice}
   const [showSavePrices, setShowSavePrices] = useState(false);
+  const [emailedToFrank, setEmailedToFrank] = useState(false);
   const [generatedSql, setGeneratedSql] = useState("");
 
   // ── Cost dial-in (same local-edit-then-SQL pattern as price, but for
@@ -3601,16 +4210,25 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // Wholesale doesn't get misread as a Floor override if the tier is later
   // flipped while viewing the same sheet.
   function setSheetItemPrice(p, newPrice) {
-    setSheetItems(prev => prev.map(si => si.item === p.item
-      ? { ...si, price: newPrice, priceTier: tier, priceDist: tier === "wholesale" ? "any" : dist }
-      : si));
+    // Wholesale gets its own independent slot (si.wholesalePrice) -- see the
+    // 2026-10-27 note on allPriceEdits below for why Target/Floor's shared
+    // "last edited tier" slot can't also hold Wholesale.
+    if (tier === "wholesale") {
+      setSheetItems(prev => prev.map(si => si.item === p.item ? { ...si, wholesalePrice: newPrice } : si));
+    } else {
+      setSheetItems(prev => prev.map(si => si.item === p.item
+        ? { ...si, price: newPrice, priceTier: tier, priceDist: dist }
+        : si));
+    }
     Analytics.track("sheet_item_price_override", { item: p.item, product: p.name, tier, dist, newPrice });
   }
-  function clearSheetItemPrice(item) {
-    setSheetItems(prev => prev.map(si => si.item === item
-      ? { ...si, price: undefined, priceTier: undefined, priceDist: undefined }
-      : si));
-    Analytics.track("sheet_item_price_reset", { item });
+  function clearSheetItemPrice(item, forTier) {
+    setSheetItems(prev => prev.map(si => {
+      if (si.item !== item) return si;
+      if (forTier === "wholesale") return { ...si, wholesalePrice: undefined };
+      return { ...si, price: undefined, priceTier: undefined, priceDist: undefined };
+    }));
+    Analytics.track("sheet_item_price_reset", { item, tier: forTier });
   }
   // Per-sheet-item COST override -- same pattern as price, but keyed only by
   // district (not tier -- cost isn't a Wholesale/Floor/Target concept).
@@ -3720,12 +4338,21 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // whichever one was actually typed in most recently IS the real edit, and
   // the other is always exactly 5% away from it.
   function sheetItemPriceFor(si, p) {
-    const curDist = tier === "wholesale" ? "any" : dist;
-    if (si.price != null && si.priceTier === tier && si.priceDist === curDist) {
+    // Wholesale reads from its own independent slot (si.wholesalePrice) --
+    // see the 2026-10-27 note on allPriceEdits for why it can't share
+    // Target/Floor's slot.
+    if (tier === "wholesale") {
+      if (si.wholesalePrice != null) {
+        const raw = rawPriceFor(p);
+        return { price: si.wholesalePrice, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
+      }
+      return { ...rawPriceFor(p), isEdited: false };
+    }
+    if (si.price != null && si.priceTier === tier && si.priceDist === dist) {
       const raw = rawPriceFor(p);
       return { price: si.price, label: raw.label.replace(/ \(Nat\)$/, "") + " (edited)", isEdited: true };
     }
-    if (si.price != null && si.priceDist === curDist && tier !== "wholesale" && si.priceTier !== "wholesale") {
+    if (si.price != null && si.priceDist === dist && si.priceTier !== "wholesale") {
       const derived = si.priceTier === "target" ? si.price * 0.95 : si.priceTier === "floor" ? si.price / 0.95 : null;
       if (derived != null) {
         const raw = rawPriceFor(p);
@@ -3743,32 +4370,53 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   // the open sheet's own dial-in prices, never another saved sheet's.
   const allPriceEdits = useMemo(() => {
     const ladder = Object.entries(priceOverrides).map(([key, ov]) => ({ ...ov, key, source: "ladder" }));
-    const sheet = sheetItems.filter(si => si.price != null && si.priceTier != null).flatMap(si => {
+    const sheet = sheetItems.flatMap(si => {
       const p = resolveProduct(si.item);
       if (!p) return [];
-      const raw = rawPriceFor(p, si.priceTier, si.priceDist);
-      const entries = [{
-        key: "sheet|" + si.item + "|" + si.priceTier + "|" + si.priceDist,
-        item: si.item, productName: p.name, pkg: p.pkg,
-        tier: si.priceTier, dist: si.priceDist, isNat: raw.isNat,
-        newPrice: si.price, originalPrice: raw.price,
-        dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
-        source: "sheet",
-      }];
-      // Floor is always 5% below Target -- push the derived counterpart
-      // column too, so saving actually keeps both in sync in the real
-      // database, not just on screen (see sheetItemPriceFor above).
-      if (si.priceTier === "target" || si.priceTier === "floor") {
-        const counterpartTier = si.priceTier === "target" ? "floor" : "target";
-        const counterpartPrice = si.priceTier === "target" ? si.price * 0.95 : si.price / 0.95;
-        const counterpartRaw = rawPriceFor(p, counterpartTier, si.priceDist);
+      const entries = [];
+      if (si.price != null && si.priceTier != null) {
+        const raw = rawPriceFor(p, si.priceTier, si.priceDist);
         entries.push({
-          key: "sheet|" + si.item + "|" + counterpartTier + "|" + si.priceDist + "|synced",
+          key: "sheet|" + si.item + "|" + si.priceTier + "|" + si.priceDist,
           item: si.item, productName: p.name, pkg: p.pkg,
-          tier: counterpartTier, dist: si.priceDist, isNat: counterpartRaw.isNat,
-          newPrice: counterpartPrice, originalPrice: counterpartRaw.price,
+          tier: si.priceTier, dist: si.priceDist, isNat: raw.isNat,
+          newPrice: si.price, originalPrice: raw.price,
           dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
-          source: "sheet", synced: true,
+          source: "sheet",
+        });
+        // Floor is always 5% below Target -- push the derived counterpart
+        // column too, so saving actually keeps both in sync in the real
+        // database, not just on screen (see sheetItemPriceFor above).
+        if (si.priceTier === "target" || si.priceTier === "floor") {
+          const counterpartTier = si.priceTier === "target" ? "floor" : "target";
+          const counterpartPrice = si.priceTier === "target" ? si.price * 0.95 : si.price / 0.95;
+          const counterpartRaw = rawPriceFor(p, counterpartTier, si.priceDist);
+          entries.push({
+            key: "sheet|" + si.item + "|" + counterpartTier + "|" + si.priceDist + "|synced",
+            item: si.item, productName: p.name, pkg: p.pkg,
+            tier: counterpartTier, dist: si.priceDist, isNat: counterpartRaw.isNat,
+            newPrice: counterpartPrice, originalPrice: counterpartRaw.price,
+            dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+            source: "sheet", synced: true,
+          });
+        }
+      }
+      // Wholesale lives in its own slot (si.wholesalePrice, 2026-10-27 fix)
+      // -- unlike Target/Floor, it has no auto-derive relationship to
+      // anything else, so it was never safe to share one "last edited
+      // tier" slot with them. Nathan hit this directly: editing Floor then
+      // switching to Wholesale and editing that silently overwrote the
+      // Floor edit, since both used to live in the same si.price field.
+      // Now both can be pending on the same item at once.
+      if (si.wholesalePrice != null) {
+        const raw = rawPriceFor(p, "wholesale", "any");
+        entries.push({
+          key: "sheet|" + si.item + "|wholesale|any",
+          item: si.item, productName: p.name, pkg: p.pkg,
+          tier: "wholesale", dist: "any", isNat: raw.isNat,
+          newPrice: si.wholesalePrice, originalPrice: raw.price,
+          dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit,
+          source: "sheet",
         });
       }
       return entries;
@@ -3856,28 +4504,70 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
   }
   function clearAllPriceOverrides() {
     setPriceOverrides({});
-    setSheetItems(prev => prev.map(si => ({ ...si, price: undefined, priceTier: undefined, priceDist: undefined })));
+    setSheetItems(prev => prev.map(si => ({ ...si, price: undefined, priceTier: undefined, priceDist: undefined, wholesalePrice: undefined })));
     setGeneratedSql("");
   }
 
+  // Upsert-based, not INSERT-vs-UPDATE-guessed (2026-10-27 fix, same root
+  // cause/fix as the new Pricing-section edit feature's generatePricingSql()
+  // -- `isNat` only tells you one column was null, not whether a
+  // district_prices row exists at all, so a bare INSERT could collide with
+  // a real row that already had the OTHER column set. Grouping by (item,
+  // district) also avoids inserting the same row twice when target+floor
+  // are both edited together (the normal case, since they auto-sync).
   function generatePriceSql() {
-    const lines = allPriceEdits.map(ov => {
-      const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
+    const lines = [];
+    const groups = {};
+    allPriceEdits.forEach(ov => {
       if (ov.tier === "wholesale") {
         // Sheet edits happen in the same per-package basis as Cost/Target/
         // Floor (see wholesaleBasis()), but skus.wholesale actually stores
         // a flat per-oz rate for dry-oz-priced products -- convert back
         // before writing so the saved value matches what the column means.
+        const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
         const rawWholesale = (ov.dryOzPrice && ov.ozPerUnit) ? ov.newPrice / ov.ozPerUnit : ov.newPrice;
-        return `UPDATE public.skus SET wholesale = ${rawWholesale} WHERE item = ${ov.item}; -- ${tag}`;
+        lines.push(`UPDATE public.skus SET wholesale = ${rawWholesale} WHERE item = ${ov.item}; -- ${tag}`);
+        return;
       }
-      const col = ov.tier === "floor" ? "floor_price" : "target_price";
-      if (ov.isNat) {
-        return `INSERT INTO public.district_prices (sku_item, district_id, ${col}) VALUES (${ov.item}, '${ov.dist}', ${ov.newPrice}); -- ${tag} (was showing National fallback, no existing row for this district)`;
-      }
-      return `UPDATE public.district_prices SET ${col} = ${ov.newPrice} WHERE sku_item = ${ov.item} AND district_id = '${ov.dist}'; -- ${tag}`;
+      const gkey = ov.item + "|" + ov.dist;
+      if (!groups[gkey]) groups[gkey] = { item: ov.item, dist: ov.dist, productName: ov.productName, pkg: ov.pkg };
+      groups[gkey][ov.tier] = ov.newPrice;
+    });
+    Object.values(groups).forEach(g => {
+      const tag = g.productName + (g.pkg ? " (" + g.pkg + ")" : "") + " · item #" + g.item;
+      const cols = [], vals = [], updates = [];
+      if (g.target != null) { cols.push("target_price"); vals.push(g.target); updates.push("target_price = EXCLUDED.target_price"); }
+      if (g.floor != null) { cols.push("floor_price"); vals.push(g.floor); updates.push("floor_price = EXCLUDED.floor_price"); }
+      lines.push(`INSERT INTO public.district_prices (sku_item, district_id, ${cols.join(", ")}) VALUES (${g.item}, '${g.dist}', ${vals.join(", ")}) ON CONFLICT (sku_item, district_id) DO UPDATE SET ${updates.join(", ")}; -- ${tag}`);
     });
     setGeneratedSql(lines.join("\n"));
+  }
+
+  // Same "email Frank Moore the Floor + Wholesale changes" feature as the
+  // new Pricing-section panel (2026-10-27) -- Nathan found it missing here
+  // since this is Sheet's own, separately-built review modal, not
+  // PricingSqlPanel. Sheet's own wholesale overrides always carry
+  // dist:"any" (wholesale has no real per-district column), so this falls
+  // back to whichever district Sheet is CURRENTLY viewing for the label,
+  // same "viewing context" convention the Pricing-section card uses.
+  function emailFloorWholesaleToFrank() {
+    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    const emailEdits = allPriceEdits.filter(ov => ov.tier === "floor" || ov.tier === "wholesale")
+      .sort((a, b) => (a.item - b.item) || (a.tier === b.tier ? 0 : a.tier === "floor" ? -1 : 1));
+    const lines = emailEdits.map(ov => {
+      const effDist = (ov.dist && ov.dist !== "any") ? ov.dist : dist;
+      const full = effDist === "wtx" ? "West TX" : effDist === "etx" ? "East TX" : effDist;
+      const abbrev = effDist === "wtx" ? "W TX" : effDist === "etx" ? "E TX" : effDist;
+      const head = `${ov.productName}${ov.pkg ? " (" + ov.pkg + ")" : ""} — Item #${ov.item} — `;
+      return ov.tier === "wholesale"
+        ? `${head}(${abbrev} Wholesale): $${ov.newPrice.toFixed(2)}`
+        : `${head}(${full}) Floor: $${ov.newPrice.toFixed(2)} `;
+    });
+    const body = `Hey Frank,\n\nPlease update the following Floor and Wholesale prices for ${today}:\n\n${lines.join("\n")}\n\nThanks,\nNathan`;
+    try { navigator.clipboard?.writeText(body); } catch (e) {}
+    setEmailedToFrank(true); setTimeout(() => setEmailedToFrank(false), 2500);
+    const mailto = "mailto:" + PRICING_EMAIL_TO + "?subject=" + encodeURIComponent("Pricing Updates") + "&body=" + encodeURIComponent(body);
+    window.location.href = mailto;
   }
 
   const rows = useMemo(() => sheetItems.map(si => {
@@ -4163,6 +4853,20 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
               <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
                 style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.amber, border: "1px solid " + S.amber, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
                 💰 Save Prices ({allPriceEdits.length})
+              </button>
+            )}
+            {/* Same floating "don't lose track of this" reminder as the new
+                Pricing-section edit feature, added 2026-10-27 per Nathan
+                ("forgot where to find the update pricing button on the
+                sheet tool") -- opens the exact same existing review panel
+                as the toolbar button above, just always visible instead of
+                needing to be scrolled to. Amber (Sheet's existing color),
+                not red -- deliberately left as-is per Nathan's own call to
+                leave Sheet's styling alone. */}
+            {canEdit && allPriceEdits.length > 0 && (
+              <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
+                style={{ position: "fixed", right: 16, bottom: 16, zIndex: 400, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg,#7a5a12,#c9900f)", color: "#fff", border: "none", borderRadius: 999, padding: "12px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 10px 28px rgba(201,144,15,.45)" }}>
+                💰 {allPriceEdits.length} Price Change{allPriceEdits.length === 1 ? "" : "s"} Pending
               </button>
             )}
             {canEdit && sheetCostEdits.length > 0 && (
@@ -4453,7 +5157,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                             {r.isEdited && (
                               <React.Fragment>
                                 <span style={{ color: S.muted, fontStyle: "italic" }}>🔒 yours only</span>
-                                <span onClick={() => clearSheetItemPrice(r.p.item)} title="Reset to list price"
+                                <span onClick={() => clearSheetItemPrice(r.p.item, tier)} title="Reset to list price"
                                   style={{ cursor: "pointer", color: S.amber, textDecoration: "underline" }}>↺ reset</span>
                               </React.Fragment>
                             )}
@@ -4651,7 +5355,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.muted, textAlign: "right" }}>{fmt(ov.originalPrice)}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", fontSize: 12, color: S.amber, fontWeight: 700, textAlign: "right" }}>{fmt(ov.newPrice)}</td>
                       <td style={{ padding: "6px 4px", borderBottom: "1px solid " + S.border + "60", textAlign: "right" }}>
-                        <button onClick={() => ov.source === "sheet" ? clearSheetItemPrice(ov.item) : clearPriceOverride(ov.key)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
+                        <button onClick={() => ov.source === "sheet" ? clearSheetItemPrice(ov.item, ov.tier) : clearPriceOverride(ov.key)} style={{ background: "none", border: "none", color: S.muted, fontSize: 14, cursor: "pointer" }}>✕</button>
                       </td>
                     </tr>
                   ))}
@@ -4668,6 +5372,14 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                 </div>
               )}
             </div>
+            {allPriceEdits.some(ov => ov.tier === "floor" || ov.tier === "wholesale") && (
+              <div style={{ padding: "0 20px" }}>
+                <button onClick={emailFloorWholesaleToFrank}
+                  style={{ width: "100%", fontSize: 12, fontWeight: 700, color: "#fff", background: "linear-gradient(135deg," + S.blue + ",#4a7fb5)", border: "none", borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>
+                  {emailedToFrank ? "✓ Email opened (text also copied)" : "📧 Email Floor & Wholesale Prices to Frank Moore"}
+                </button>
+              </div>
+            )}
             <div style={{ padding: "14px 20px 20px", display: "flex", gap: 8 }}>
               <button onClick={() => setShowSavePrices(false)} style={{ fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Close</button>
               <button onClick={clearAllPriceOverrides} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
@@ -4973,6 +5685,75 @@ function App() {
 
   const [favorites, setFavorites] = useState(new Set()); // Set of sku_item integers
 
+  // Pricing-section price overrides (2026-10-27, per Nathan): click-edit a
+  // price straight on a product card in Price Lookup (not just inside the
+  // Profit Sheet tool), building up a pending-changes list shown as a
+  // persistent bottom-right indicator until pushed (Copy SQL) or reverted.
+  // Deliberately separate state from ProfitSheet's own priceOverrides --
+  // Sheet edits are scoped to a saved list/what-if session, this is a
+  // direct "update the master price" action off the live catalog view.
+  // Keyed "item|tier|dist" -> {item,productName,pkg,tier,dist,isNat,newPrice,dryOzPrice,ozPerUnit}.
+  const [pricingOverrides, setPricingOverridesState] = useState({});
+  const [showPricingSqlPanel, setShowPricingSqlPanel] = useState(false);
+  const [pricingSql, setPricingSql] = useState("");
+
+  function setPricingOverride(meta, tier, dist, isNat, newPrice) {
+    const key = meta.item + "|" + tier + "|" + (dist || "any");
+    setPricingOverridesState(prev => ({
+      ...prev,
+      [key]: { item: meta.item, productName: meta.productName, pkg: meta.pkg, tier, dist: dist || "any", isNat, newPrice, dryOzPrice: meta.dryOzPrice, ozPerUnit: meta.ozPerUnit },
+    }));
+    setPricingSql("");
+  }
+  function clearPricingOverride(key) {
+    setPricingOverridesState(prev => { const n = { ...prev }; delete n[key]; return n; });
+    setPricingSql("");
+  }
+  function clearAllPricingOverrides() {
+    setPricingOverridesState({});
+    setPricingSql("");
+  }
+  // Upsert-based, not INSERT-vs-UPDATE-guessed (2026-10-27 fix -- Nathan hit
+  // a real "duplicate key value violates unique constraint
+  // district_prices_sku_item_district_id_key" running the old SQL). Root
+  // cause: `isNat` (w_target/e_target == null) only tells you that ONE
+  // column is null, not whether a district_prices ROW exists at all -- a
+  // row can perfectly well exist with target_price set and floor_price
+  // still null (or vice versa). Editing the null column then generated a
+  // bare INSERT, which collided with the row that already existed for the
+  // OTHER column. Fixed by grouping target+floor edits by (item, district)
+  // and emitting one `INSERT ... ON CONFLICT (sku_item, district_id) DO
+  // UPDATE` per group covering whichever column(s) changed -- correct
+  // whether the row already exists, is missing entirely, or (the floor/
+  // target auto-sync's normal case) both columns are being written at once,
+  // which would otherwise INSERT the same key twice and hit this exact
+  // error on the second statement.
+  function generatePricingSql() {
+    const lines = [];
+    const groups = {};
+    Object.values(pricingOverrides).forEach(ov => {
+      if (ov.tier === "wholesale") {
+        const tag = ov.productName + (ov.pkg ? " (" + ov.pkg + ")" : "") + " · item #" + ov.item;
+        const rawWholesale = (ov.dryOzPrice && ov.ozPerUnit) ? ov.newPrice / ov.ozPerUnit : ov.newPrice;
+        lines.push(`UPDATE public.skus SET wholesale = ${rawWholesale} WHERE item = ${ov.item}; -- ${tag}`);
+        return;
+      }
+      const gkey = ov.item + "|" + ov.dist;
+      if (!groups[gkey]) groups[gkey] = { item: ov.item, dist: ov.dist, productName: ov.productName, pkg: ov.pkg };
+      groups[gkey][ov.tier] = ov.newPrice;
+    });
+    Object.values(groups).forEach(g => {
+      const tag = g.productName + (g.pkg ? " (" + g.pkg + ")" : "") + " · item #" + g.item;
+      const cols = [], vals = [], updates = [];
+      if (g.target != null) { cols.push("target_price"); vals.push(g.target); updates.push("target_price = EXCLUDED.target_price"); }
+      if (g.floor != null) { cols.push("floor_price"); vals.push(g.floor); updates.push("floor_price = EXCLUDED.floor_price"); }
+      lines.push(`INSERT INTO public.district_prices (sku_item, district_id, ${cols.join(", ")}) VALUES (${g.item}, '${g.dist}', ${vals.join(", ")}) ON CONFLICT (sku_item, district_id) DO UPDATE SET ${updates.join(", ")}; -- ${tag}`);
+    });
+    const sql = lines.join("\n");
+    setPricingSql(sql);
+    return sql;
+  }
+
   // Light/dark skin toggle. S itself is mutated (see applyThemeMode) --
   // this state exists purely to force the re-render that picks the mutation up.
   const [themeMode, setThemeMode] = useState(loadThemeMode);
@@ -5246,7 +6027,7 @@ function App() {
     ? (view === "tx" ? txCats : view === "nat" ? natAlpha : view === "organic" ? ["ALL"] : txCats)
     : (view === "district" ? districtCats : view === "national" ? natAlpha : ["ALL"]);
 
-  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite, landedCosts };
+  const cardProps = { overridesMap, organicNames, productInfo, labelUrls, allLocations: locations, favorites, onToggleFavorite: toggleFavorite, landedCosts, pricingOverrides, setPricingOverride, clearPricingOverride };
 
   async function toggleFavorite(item) {
     const userId = session?.user?.id;
@@ -5443,6 +6224,118 @@ function App() {
       {appMode === "access" && isAdmin && (
         <AccessRequestsPanel requests={accessRequests} onRefresh={refreshAccessRequests} locations={locations} />
       )}
+
+      {/* Pending Price Lookup edits -- stays put (any appMode/tab) until
+          pushed or reverted, same "don't lose it on navigation" fix already
+          applied to the Sheet. Admin-only, matching who can edit a cell. */}
+      {isAdmin && Object.keys(pricingOverrides).length > 0 && (
+        <button onClick={() => setShowPricingSqlPanel(true)}
+          style={{ position: "fixed", right: 16, bottom: 16, zIndex: 400, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg,#8a1f1f,#c23b3b)", color: "#fff", border: "none", borderRadius: 999, padding: "12px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 10px 28px rgba(194,59,59,.45)" }}>
+          💰 {Object.keys(pricingOverrides).length} Price Change{Object.keys(pricingOverrides).length === 1 ? "" : "s"} Pending
+        </button>
+      )}
+      {showPricingSqlPanel && (
+        <PricingSqlPanel overrides={pricingOverrides} sql={pricingSql}
+          onGenerate={generatePricingSql}
+          onClearOne={clearPricingOverride}
+          onClearAll={clearAllPricingOverrides}
+          onClose={() => setShowPricingSqlPanel(false)} />
+      )}
+    </div>
+  );
+}
+
+// ═══ PENDING PRICE CHANGES REVIEW PANEL ═══
+// Lists every pending Price Lookup edit (product, tier/district, was -> now),
+// lets Nathan drop a single one, generate + copy the exact SQL to paste into
+// the Supabase SQL Editor, or discard everything. Same shape as ProfitSheet's
+// "Save Prices" panel, just triggered from the floating bottom-right button
+// instead of a toolbar button, since edits can originate from any product
+// card in a long scrollable list.
+// Frank Moore (Pricing) gets a plain-English email of just the FLOOR price
+// changes -- not the SQL, not Target/Wholesale -- per Nathan 2026-10-27.
+const PRICING_EMAIL_TO = "FMoore@wilburellis.com";
+
+function PricingSqlPanel({ overrides, sql, onGenerate, onClearOne, onClearAll, onClose }) {
+  const [copied, setCopied] = useState(false);
+  const [emailed, setEmailed] = useState(false);
+  const rows = Object.entries(overrides);
+  // Floor + Wholesale go to Frank -- Target doesn't (2026-10-27, Nathan
+  // asked to add Wholesale alongside the Floor changes already in here).
+  // Sorted by item then Floor-before-Wholesale so each product's two lines
+  // land next to each other instead of scattered in override-insertion order.
+  const emailRows = rows.filter(([key, ov]) => ov.tier === "floor" || ov.tier === "wholesale")
+    .sort((a, b) => (a[1].item - b[1].item) || (a[1].tier === b[1].tier ? 0 : a[1].tier === "floor" ? -1 : 1));
+  async function copySql() {
+    const text = sql || onGenerate();
+    try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) {}
+  }
+  // Opens a ready-to-send email in whatever the OS's default mail client is
+  // (Outlook included, if that's the default) via a plain mailto: link --
+  // the one thing a static local HTML page can trigger with no API/OAuth
+  // setup. Also copies the same text to the clipboard as a fallback, in
+  // case the mail client doesn't pick up a long mailto body cleanly.
+  async function emailPricesToFrank() {
+    const today = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+    // Exact template Nathan asked for (2026-10-27) -- Floor and Wholesale
+    // use two different label shapes on purpose: Floor spells out the full
+    // district before the word "Floor" ("(East TX) Floor: $X.XX"),
+    // Wholesale abbreviates it folded into one parenthetical with the word
+    // "Wholesale" ("(E TX Wholesale): $X.XX").
+    const lines = emailRows.map(([key, ov]) => {
+      const full = ov.dist === "wtx" ? "West TX" : ov.dist === "etx" ? "East TX" : ov.dist;
+      const abbrev = ov.dist === "wtx" ? "W TX" : ov.dist === "etx" ? "E TX" : ov.dist;
+      const head = `${ov.productName}${ov.pkg ? " (" + ov.pkg + ")" : ""} — Item #${ov.item} — `;
+      return ov.tier === "wholesale"
+        ? `${head}(${abbrev} Wholesale): $${ov.newPrice.toFixed(2)}`
+        : `${head}(${full}) Floor: $${ov.newPrice.toFixed(2)} `;
+    });
+    const body = `Hey Frank,\n\nPlease update the following Floor and Wholesale prices for ${today}:\n\n${lines.join("\n")}\n\nThanks,\nNathan`;
+    try { await navigator.clipboard.writeText(body); setEmailed(true); setTimeout(() => setEmailed(false), 2500); } catch (e) {}
+    const mailto = "mailto:" + PRICING_EMAIL_TO + "?subject=" + encodeURIComponent("Pricing Updates") + "&body=" + encodeURIComponent(body);
+    window.location.href = mailto;
+  }
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 500, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "40px 14px" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(620px,100%)", background: S.card, border: "1px solid " + S.border, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+          <strong style={{ fontSize: 15 }}>Pending Price Changes ({rows.length})</strong>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 20, color: S.muted, cursor: "pointer" }}>&times;</button>
+        </div>
+        <p style={{ fontSize: 11, color: S.muted, margin: "0 0 14px" }}>
+          Nothing writes to the database automatically -- copy the SQL below and run it yourself in the Supabase SQL Editor, then come back and Discard All.
+        </p>
+        <div style={{ border: "1px solid " + S.border, borderRadius: 10, overflow: "hidden", marginBottom: 14 }}>
+          {rows.map(([key, ov]) => (
+            <div key={key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 12px", borderBottom: "1px solid " + S.border, fontSize: 12 }}>
+              <div>
+                <div style={{ fontWeight: 700, color: S.text }}>{ov.productName}{ov.pkg ? " (" + ov.pkg + ")" : ""}</div>
+                <div style={{ color: S.muted, fontSize: 10.5, marginTop: 1 }}>
+                  {(ov.tier === "wholesale" ? "Wholesale" : ov.tier === "floor" ? "Floor" : "Target") + " · " + (ov.dist === "wtx" ? "West TX" : ov.dist === "etx" ? "East TX" : ov.dist)}
+                  {ov.isNat ? " (was National)" : ""}
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ fontWeight: 700, color: "#c23b3b" }}>${ov.newPrice.toFixed(2)}</div>
+                <span onClick={() => onClearOne(key)} style={{ cursor: "pointer", color: S.muted, fontSize: 15 }}>&times;</span>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={emailPricesToFrank} disabled={emailRows.length === 0} title={emailRows.length === 0 ? "No Floor or Wholesale changes in this batch" : "Opens a ready-to-send email (also copies the text, just in case)"}
+          style={{ width: "100%", marginBottom: 10, fontSize: 12, fontWeight: 700, color: emailRows.length ? "#fff" : S.muted, background: emailRows.length ? "linear-gradient(135deg," + S.blue + ",#4a7fb5)" : S.tag, border: "none", borderRadius: 8, padding: "9px 14px", cursor: emailRows.length ? "pointer" : "not-allowed" }}>
+          {emailed ? "✓ Email opened (text also copied)" : "📧 Email Floor & Wholesale Prices to Frank Moore (" + emailRows.length + ")"}
+        </button>
+        <div style={{ display: "flex", gap: 8, marginBottom: sql ? 10 : 0 }}>
+          <button onClick={copySql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: "#fff", background: "linear-gradient(135deg,#8a1f1f,#c23b3b)", border: "none", borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>
+            {copied ? "✓ Copied" : "📋 Copy SQL"}
+          </button>
+          <button onClick={onClearAll} style={{ fontSize: 12, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>Discard All</button>
+        </div>
+        {sql && (
+          <textarea readOnly value={sql} style={{ width: "100%", height: 140, marginTop: 4, background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 11, fontFamily: "monospace", padding: 10, boxSizing: "border-box", resize: "vertical" }} />
+        )}
+      </div>
     </div>
   );
 }
