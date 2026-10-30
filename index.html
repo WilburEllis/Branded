@@ -110,6 +110,65 @@ const Analytics = (() => {
   return { setUser, track, trackSearch, sessionId, cleanup };
 })();
 
+// ═══ "WHAT'S NEW" SPLASH SCREEN ═══ (2026-10-30, per Nathan)
+// Every entry here is a real, already-PUSHED-LIVE release -- an entry only
+// gets added here at the exact moment Nathan confirms he's pushed, in the
+// SAME edit that moves that content from "Unreleased" to a dated heading in
+// Daybook/WE Price/sales_facing_changelog.md (see that file, and the
+// feedback_we_price_changelog memory, for the actual authoring workflow).
+// Adding something here before it's really live would describe features
+// that don't exist yet for whoever sees the splash.
+//
+// `id` MUST sort correctly with plain string comparison against every other
+// id here (use "YYYY-MM-DD", or "YYYY-MM-DD-2" etc. for a same-day second
+// release) -- the unseen-release filter below is a bare `r.id > lastSeen`
+// string compare, no date parsing.
+//
+// One combined screen listing every missed release at once (not one modal
+// per release, stacked) -- Nathan's call: "whichever is easier... one
+// screen with all updates since last login is awesome if its easy to do."
+const RELEASES = [
+  // Example shape for the next real entry:
+  // { id: "2026-11-02", date: "November 2, 2026", items: [
+  //     "Add your own CP products in the Calc tab's CP Pairing Calculator...",
+  //     "Commodity dropdown reordered...",
+  // ] },
+];
+
+function WhatsNewSplash({ releases, catchup, onDismiss }) {
+  if (!releases || releases.length === 0) return null;
+  // Newest release first, standard "what's new" convention.
+  const ordered = releases.slice().sort((a, b) => b.id.localeCompare(a.id));
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 2000, background: "rgba(0,0,0,.6)", display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ width: "min(520px,100%)", maxHeight: "85vh", display: "flex", flexDirection: "column", background: S.card, border: "1px solid " + S.border, borderRadius: 16, overflow: "hidden", boxShadow: "0 24px 60px rgba(0,0,0,.4)" }}>
+        <div style={{ padding: "20px 22px 14px", background: "linear-gradient(135deg,#1e4a2c,#2d6b3f)", color: "#fff" }}>
+          <div style={{ fontSize: 20, fontWeight: 800 }}>✨ What's New</div>
+          <div style={{ fontSize: 12, opacity: .85, marginTop: 2 }}>{catchup ? "It's been a while since you've logged in — here's everything new" : "Since your last login"}</div>
+        </div>
+        <div style={{ overflowY: "auto", padding: "16px 22px" }}>
+          {ordered.map((r, i) => (
+            <div key={r.id} style={{ marginBottom: i === ordered.length - 1 ? 0 : 18 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: .5, marginBottom: 8 }}>{r.date}</div>
+              {r.items.map((item, j) => (
+                <div key={j} style={{ display: "flex", gap: 8, fontSize: 13.5, color: S.text, marginBottom: 8, lineHeight: 1.4 }}>
+                  <span style={{ color: S.green, flexShrink: 0 }}>•</span>
+                  <span>{item}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div style={{ padding: "14px 22px 20px" }}>
+          <button onClick={onDismiss} style={{ width: "100%", fontSize: 13, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 10, padding: "11px 14px", cursor: "pointer" }}>
+            Got it
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ═══ STYLES ═══
 // Two token sets (Dark = current default, Light = "Daylight" skin) behind one
 // shared, MUTABLE `S` object -- every component in this file reads colors via
@@ -738,7 +797,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
           )}
           {mg && <div style={{ fontSize: 9, color: S.muted, fontWeight: 600 }}>{mg}</div>}
         </div>
-        {ov && <span onClick={e => { e.stopPropagation(); onClearOverride(overrideKey); }} style={{ display: "block", marginTop: 2, fontSize: 9, color: "#c23b3b", textDecoration: "underline", cursor: "pointer" }}>↺ revert</span>}
+        {ov && <span onClick={e => { e.stopPropagation(); Analytics.track("price_edit_reverted", { item: p.item, product: p.name, tier: dbTier, dist: dbDist || "any" }); onClearOverride(overrideKey); }} style={{ display: "block", marginTop: 2, fontSize: 9, color: "#c23b3b", textDecoration: "underline", cursor: "pointer" }}>↺ revert</span>}
         {canEdit && !editing && <span onClick={startEdit} title="Edit price" style={{ position: "absolute", top: 4, right: 5, fontSize: 10, color: S.muted, cursor: "pointer", padding: 2 }}>✎</span>}
       </div>
     );
@@ -797,6 +856,7 @@ function ProductCard({ p, district, location, isNational, isAdmin, isManager, hi
       if (!cell.dbTier || !setPricingOverride) return;
       const meta = { item: p.item, productName: p.name, pkg: p.pkg, dryOzPrice: p.dry_oz_price, ozPerUnit: p.oz_per_unit };
       setPricingOverride(meta, cell.dbTier, cell.dbDist, cell.isNat, newPrice);
+      Analytics.track("price_edit_committed", { item: p.item, product: p.name, tier: cell.dbTier, dist: cell.dbDist || "any", newPrice });
       if (cell.dbTier === "target" || cell.dbTier === "floor") {
         const counterpartTier = cell.dbTier === "target" ? "floor" : "target";
         const counterpartPrice = cell.dbTier === "target" ? newPrice * 0.95 : newPrice / 0.95;
@@ -1867,6 +1927,41 @@ function AnalyticsDashboard() {
     const totalSavedSheets = (sheetTableRows || []).length;
     const recentSheets = (sheetTableRows || []).slice(0, 15);
 
+    // ── CP Pairing Calculator activity (2026-10-30) ──
+    const cpPartnerRateEvents = rows.filter(r => r.event_type === "cp_partner_rate_changed");
+    const cpSelfAddEvents = rows.filter(r => r.event_type === "cp_self_add_product");
+    const cpRequestedEvents = rows.filter(r => r.event_type === "cp_product_requested");
+    const cpRequestDecidedEvents = rows.filter(r => r.event_type === "cp_request_decided");
+    const cpAdminAddProductEvents = rows.filter(r => r.event_type === "cp_admin_add_product");
+    const cpAdminRemoveProductEvents = rows.filter(r => r.event_type === "cp_admin_remove_product");
+    const cpAdminAddPartnerEvents = rows.filter(r => r.event_type === "cp_admin_add_partner");
+    const cpAdminRemovePartnerEvents = rows.filter(r => r.event_type === "cp_admin_remove_partner");
+    const topCpSelfAdds = topByField(cpSelfAddEvents, "product");
+    const topCpRequested = topByField(cpRequestedEvents, "product");
+    const topCpPartnerRateChanges = topByField(cpPartnerRateEvents, "cp_product");
+
+    // Live counts, not event counts (same reasoning as totalSavedSheets
+    // above -- a request event could already be resolved by now, and this
+    // is "how many CP products exist right now", not "how many times
+    // someone added one in the time window").
+    const { count: totalCpPairings } = await supabaseClient.from("cp_pairings").select("id", { count: "exact", head: true });
+    const { count: pendingCpRequests } = await supabaseClient.from("cp_product_requests").select("id", { count: "exact", head: true }).eq("status", "pending");
+
+    // ── Pricing tool activity (2026-10-30) ── combines the new App-level
+    // Price Lookup edit feature (price_*) with the equivalent newer buttons
+    // added on top of the Profit Sheet's OWN, separately-built price-edit
+    // system (sheet_price_*) -- different code paths, same user-facing
+    // action, so counted together here. Sheet's original per-cell price
+    // edits (sheet_item_price_override/sheet_price_override) already have
+    // their own metric above (priceChangeCount) -- not duplicated here.
+    const priceEditCommitEvents = rows.filter(r => r.event_type === "price_edit_committed");
+    const priceEditRevertEvents = rows.filter(r => r.event_type === "price_edit_reverted");
+    const pricingPanelOpenCount = rows.filter(r => r.event_type === "price_changes_panel_opened" || r.event_type === "sheet_price_panel_opened").length;
+    const pricingSqlCopiedCount = rows.filter(r => r.event_type === "price_sql_copied" || r.event_type === "sheet_price_sql_copied").length;
+    const pricingDiscardAllCount = rows.filter(r => r.event_type === "price_changes_discarded_all" || r.event_type === "sheet_price_discard_all").length;
+    const pricingEmailFrankCount = rows.filter(r => r.event_type === "price_email_frank" || r.event_type === "sheet_price_email_frank").length;
+    const topPriceEditCommits = topByField(priceEditCommitEvents, "product");
+
     // Daily usage timeline
     const dailyUsage = {};
     rows.forEach(r => {
@@ -1925,6 +2020,18 @@ function AnalyticsDashboard() {
       exportCount: exportEvents.length, printCount: printEvents.length,
       topSheetAdds, totalSavedSheets, recentSheets,
       themeDarkCount, themeLightCount,
+      // CP Pairing Calculator
+      cpPartnerRateCount: cpPartnerRateEvents.length, topCpPartnerRateChanges,
+      cpSelfAddCount: cpSelfAddEvents.length, topCpSelfAdds,
+      cpRequestedCount: cpRequestedEvents.length, topCpRequested,
+      cpRequestDecidedCount: cpRequestDecidedEvents.length,
+      cpAdminAddProductCount: cpAdminAddProductEvents.length, cpAdminRemoveProductCount: cpAdminRemoveProductEvents.length,
+      cpAdminAddPartnerCount: cpAdminAddPartnerEvents.length, cpAdminRemovePartnerCount: cpAdminRemovePartnerEvents.length,
+      totalCpPairings: totalCpPairings || 0, pendingCpRequests: pendingCpRequests || 0,
+      // Pricing tool (Price Lookup edit feature + Sheet's newer additions)
+      priceEditCommitCount: priceEditCommitEvents.length, topPriceEditCommits,
+      priceEditRevertCount: priceEditRevertEvents.length,
+      pricingPanelOpenCount, pricingSqlCopiedCount, pricingDiscardAllCount, pricingEmailFrankCount,
       rawRows: rows
     });
     setLoading(false);
@@ -2071,6 +2178,54 @@ function AnalyticsDashboard() {
           <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>cleared their sheet</span></span>
           <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
         </div>;
+      case "cp_self_add_product":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>added</span> <span style={{ color: S.green, fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>via "+ Add CP Product"</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "cp_product_requested":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>requested</span> <span style={{ color: S.amber, fontWeight: 600 }}>{r.event_data?.product}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "cp_request_decided":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>marked</span> <span style={{ fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: r.event_data?.decision === "done" ? S.green : S.muted }}>{r.event_data?.decision}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "cp_admin_add_product":
+      case "cp_admin_remove_product":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_type === "cp_admin_add_product" ? "added" : "removed"}</span> <span style={{ fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>(Manage Pairings)</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "cp_admin_add_partner":
+      case "cp_admin_remove_partner":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_type === "cp_admin_add_partner" ? "paired" : "unpaired"}</span> <span style={{ fontWeight: 600 }}>{r.event_data?.partner || r.event_data?.partner_item}</span> <span style={{ color: S.muted }}>with</span> <span style={{ fontWeight: 600 }}>{r.event_data?.cp_product}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "cp_partner_rate_changed":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>set</span> <span style={{ fontWeight: 600 }}>{r.event_data?.partner}</span> <span style={{ color: S.muted }}>(for {r.event_data?.cp_product}) to</span> <span style={{ fontWeight: 600 }}>{r.event_data?.rate} {r.event_data?.unit}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "price_edit_committed":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>set</span> <span style={{ fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>{r.event_data?.tier}</span> <span style={{ color: "#c23b3b", fontWeight: 600 }}>${r.event_data?.newPrice}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "price_edit_reverted":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>reverted</span> <span style={{ fontWeight: 600 }}>{r.event_data?.product}</span> <span style={{ color: S.muted }}>{r.event_data?.tier}</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
+      case "price_email_frank":
+      case "sheet_price_email_frank":
+        return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
+          <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>emailed Frank Moore</span> <span style={{ color: S.muted }}>({r.event_data?.count} line{r.event_data?.count === 1 ? "" : "s"})</span></span>
+          <span style={{ color: S.muted, fontSize: 10, flexShrink: 0, marginLeft: 8 }}>{time}</span>
+        </div>;
       default:
         return <div key={r.id} style={{ padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40", display: "flex", justifyContent: "space-between" }}>
           <span><span style={{ fontWeight: 600 }}>{user}</span> <span style={{ color: S.muted }}>{r.event_type}</span></span>
@@ -2209,6 +2364,117 @@ function AnalyticsDashboard() {
               <div style={metricLabel}>Sheets Cleared ▸</div>
             </div>
           </div>
+
+          {/* CP PAIRING CALCULATOR METRICS (2026-10-30) */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: .5, margin: "4px 2px 8px" }}>🧬 CP Pairing Calculator</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div style={cs} onClick={() => openDrill("Self-Added CP Products", "cp_self_add_product")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.green }}>{data.cpSelfAddCount}</div>
+              <div style={metricLabel}>+ Add CP Product ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Product Requests", "cp_product_requested")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.amber }}>{data.cpRequestedCount}</div>
+              <div style={metricLabel}>Product Requests ▸</div>
+            </div>
+            <div style={{ ...cs, cursor: "default" }}>
+              <div style={{ ...metricStyle, fontSize: 24, color: data.pendingCpRequests > 0 ? "#ef4444" : S.purple }}>{data.pendingCpRequests}</div>
+              <div style={metricLabel}>Pending Right Now</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div style={cs} onClick={() => openDrill("Admin: CP Products Added", "cp_admin_add_product")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.cpAdminAddProductCount}</div>
+              <div style={metricLabel}>Admin Added ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Admin: CP Products Removed", "cp_admin_remove_product")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.cpAdminRemoveProductCount}</div>
+              <div style={metricLabel}>Admin Removed ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Branded Partners Added", "cp_admin_add_partner")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.cpAdminAddPartnerCount}</div>
+              <div style={metricLabel}>Partners Added ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Branded Partner Rate Changes", "cp_partner_rate_changed")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.cpPartnerRateCount}</div>
+              <div style={metricLabel}>Rates Adjusted ▸</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <div style={{ fontSize: 10.5, color: S.muted }}>{data.totalCpPairings} CP product{data.totalCpPairings === 1 ? "" : "s"} configured across every location (all-time)</div>
+          </div>
+
+          {(data.topCpSelfAdds.length > 0 || data.topCpRequested.length > 0) && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden", display: "grid", gridTemplateColumns: "1fr 1fr" }}>
+              <div>
+                <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>Top Self-Added CP Products</div>
+                <div style={{ padding: "8px 14px 14px" }}>
+                  {data.topCpSelfAdds.map(([name, count]) => (
+                    <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                      <span style={{ fontWeight: 500 }}>{name}</span>
+                      <span style={{ color: S.green }}>{count}x</span>
+                    </div>
+                  ))}
+                  {data.topCpSelfAdds.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>None yet</div>}
+                </div>
+              </div>
+              <div style={{ borderLeft: "1px solid " + S.border }}>
+                <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>Top Requested Products</div>
+                <div style={{ padding: "8px 14px 14px" }}>
+                  {data.topCpRequested.map(([name, count]) => (
+                    <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                      <span style={{ fontWeight: 500 }}>{name}</span>
+                      <span style={{ color: S.amber }}>{count}x</span>
+                    </div>
+                  ))}
+                  {data.topCpRequested.length === 0 && <div style={{ color: S.muted, fontSize: 12, padding: 10, textAlign: "center" }}>None yet</div>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PRICING TOOL METRICS (2026-10-30) -- the new Price Lookup
+              click-to-edit feature, combined with the equivalent newer
+              buttons on the Profit Sheet's own separate price-edit system.
+              Sheet's ORIGINAL per-cell price edits already have their own
+              metric above (Prices Changed) -- not duplicated here. */}
+          <div style={{ fontSize: 11, fontWeight: 700, color: S.muted, textTransform: "uppercase", letterSpacing: .5, margin: "4px 2px 8px" }}>💰 Pricing Tool Activity</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <div style={cs} onClick={() => openDrill("Price Edits Committed", "price_edit_committed")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: "#c23b3b" }}>{data.priceEditCommitCount}</div>
+              <div style={metricLabel}>Price Edits ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Price Edits Reverted", "price_edit_reverted")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.muted }}>{data.priceEditRevertCount}</div>
+              <div style={metricLabel}>Reverted ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("Emailed to Frank Moore", null, r => r.event_type === "price_email_frank" || r.event_type === "sheet_price_email_frank")}>
+              <div style={{ ...metricStyle, fontSize: 24, color: S.blue }}>{data.pricingEmailFrankCount}</div>
+              <div style={metricLabel}>Emailed to Frank ▸</div>
+            </div>
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+            <div style={cs} onClick={() => openDrill("Pending-Changes Panel Opened", null, r => r.event_type === "price_changes_panel_opened" || r.event_type === "sheet_price_panel_opened")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.pricingPanelOpenCount}</div>
+              <div style={metricLabel}>Panel Opened ▸</div>
+            </div>
+            <div style={cs} onClick={() => openDrill("SQL Copied", null, r => r.event_type === "price_sql_copied" || r.event_type === "sheet_price_sql_copied")}>
+              <div style={{ ...metricStyle, fontSize: 18, color: S.muted }}>{data.pricingSqlCopiedCount}</div>
+              <div style={metricLabel}>SQL Copied ▸</div>
+            </div>
+          </div>
+          {data.topPriceEditCommits.length > 0 && (
+            <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
+              <div style={{ padding: "12px 14px", fontSize: 13, fontWeight: 700, borderBottom: "1px solid " + S.border }}>Most Price-Edited Products</div>
+              <div style={{ padding: "8px 14px 14px" }}>
+                {data.topPriceEditCommits.map(([name, count]) => (
+                  <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", fontSize: 12, borderBottom: "1px solid " + S.border + "40" }}>
+                    <span style={{ fontWeight: 500 }}>{name}</span>
+                    <span style={{ color: "#c23b3b" }}>{count}x edited</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* USAGE TIMELINE CHART */}
           <div style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 12, marginBottom: 10, overflow: "hidden" }}>
@@ -2515,13 +2781,22 @@ function AnalyticsDashboard() {
 // Weights verified against FertHub's own ingredientsLibrary (2026-08-31) --
 // ATS and 4-11-11 were wrong before (copy-paste artifacts): ATS was 11.06
 // (same as uan32, should be 10.80), 4-11-11 was 10.80 (should be 10.50).
-// 11-37-0 switched from 12.00 (a Simplot spec sheet) to FertHub's own 11.74
-// so the two tools agree. 28% UAN has no FertHub equivalent (not tracked
-// there at all) -- stays fully manual entry.
+// 11-37-0 originally switched from 12.00 (a Simplot spec sheet) to
+// FertHub's own 11.74 so the two tools agreed -- then corrected again
+// 2026-10-30 to 12.01, the real supplier spec (see the comment at that
+// entry below; FertHub's own value was itself wrong and got fixed too).
+// 28% UAN has no FertHub equivalent (not tracked there at all) -- stays
+// fully manual entry.
 const COMMODITIES = {
   uan32:  { name: "32% UAN",        weight: 11.06 },
   uan28:  { name: "28% UAN",        weight: 10.60 },
-  "1137": { name: "11-37-0 (APP)",  weight: 11.74 },
+  // weight corrected 2026-10-30 (Nathan: real supplier spec is 12.01, was
+  // 11.74 to match FertHub's own value, which was itself wrong -- see
+  // Fert_Hub_v5_9_7.html's phosphate_1137 entry). Only affects the truck-
+  // load profit math for plain, un-blended 11-37-0 picked straight off this
+  // dropdown -- every named Till-It Blend's price comes from the
+  // till_it_blend_prices table instead and is untouched by this value.
+  "1137": { name: "11-37-0 (APP)",  weight: 12.01 },
   "1034": { name: "10-34-0 (APP)",  weight: 11.65 },
   "411":  { name: "4-11-11",        weight: 10.50 },
   ats:    { name: "12-0-0-26S (ATS)", weight: 10.80 },
@@ -2586,6 +2861,13 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const [customName, setCustomName] = useState("");
   const [weightPerGal, setWeightPerGal] = useState("");
   const [costPerTon, setCostPerTon] = useState("");
+  // Saved Custom Blends (2026-10-30, per Nathan): Name + Density only --
+  // Cost/Price are deliberately NEVER saved here, they stay the existing
+  // fresh-typed-each-time fields below. Shared per location, not per user --
+  // see Price Updates/custom_blends_setup.sql.
+  const [customBlends, setCustomBlends] = useState([]);
+  const [customBlendsLoaded, setCustomBlendsLoaded] = useState(false);
+  const [customBlendSaveMsg, setCustomBlendSaveMsg] = useState("");
   const [sellPerTon, setSellPerTon] = useState("");
   const [loadSize, setLoadSize] = useState("4500");
   const [carrierGPA, setCarrierGPA] = useState("");
@@ -2641,6 +2923,14 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
   const [managerLocOverride, setManagerLocOverride] = useState(null);
   const activeLocation = isAdmin ? activeAdminLocation : (isManager ? (managerLocOverride || myLocIds[0] || location) : location);
   const effectiveLocation = activeLocation;
+
+  async function loadCustomBlends() {
+    if (!activeLocation) { setCustomBlends([]); setCustomBlendsLoaded(true); return; }
+    const { data } = await supabaseClient.from("custom_blends").select("*").eq("location_id", activeLocation).order("name");
+    setCustomBlends(data || []);
+    setCustomBlendsLoaded(true);
+  }
+  useEffect(() => { loadCustomBlends(); }, [activeLocation]);
 
   // Till-It Blend pricing has 4 real buckets (Lonestar/Batesville/RGV each
   // have their own real cost basis, "hereford_wtx" represents the whole West
@@ -2788,8 +3078,16 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
     if (selectedCommodityPrice) setCostPerTon(selectedCommodityPrice.cost_per_ton.toFixed(2));
   }, [commodityKey]);
 
+  // A saved Custom Blend's option value is "cb:<uuid>" -- distinct from the
+  // plain "custom" (start-from-scratch) option so onProductChange can tell
+  // "pre-fill from a saved blend" apart from "blank custom blend form".
+  const selectedCustomBlend = fertProduct.startsWith?.("cb:")
+    ? customBlends.find(b => "cb:" + b.id === fertProduct) : null;
+  const isCustomBlendType = fertProduct === "custom" || !!selectedCustomBlend;
+
   const onProductChange = (val) => {
     setFertProduct(val);
+    setCustomBlendSaveMsg("");
     // Sell price never got cleared on a product switch -- a Till-It blend's
     // auto-computed price (or a manually-typed one) would just keep showing
     // for whatever gets picked next. A Till-It blend re-fills this correctly
@@ -2798,6 +3096,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
     setSellPerTon("");
     if (val) Analytics.track("calc_commodity", { product: val });
     const tillIt = tillItOptions.find(r => r.blend_id === val);
+    const savedBlend = val.startsWith?.("cb:") ? customBlends.find(b => "cb:" + b.id === val) : null;
     if (tillIt) {
       // Handled by the useEffect above (also covers subsequent bucket toggles).
     } else if (val && val !== "custom" && COMMODITIES[val]) {
@@ -2805,12 +3104,58 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
       // Cost pre-fill (if this bucket has a real FertHub cost for it) is
       // handled by the useEffect above.
       if (!commodityPrices[val]) setCostPerTon("");
+    } else if (savedBlend) {
+      // Pre-fill Name + Density from the saved record -- Cost/Price stay
+      // blank, typed fresh every time (deliberately never saved).
+      setCustomName(savedBlend.name);
+      setWeightPerGal(String(savedBlend.weight_per_gal));
+      setCostPerTon("");
     } else if (val === "custom") {
+      setCustomName("");
       setWeightPerGal("");
     } else {
       setWeightPerGal("");
     }
   };
+
+  async function saveCustomBlend() {
+    const w = parseFloat(weightPerGal);
+    if (!customName.trim() || !Number.isFinite(w) || w <= 0) {
+      setCustomBlendSaveMsg("Enter a Name and a Density (weight/gal) first.");
+      return;
+    }
+    setCustomBlendSaveMsg("Saving…");
+    if (selectedCustomBlend) {
+      // Editing an already-saved blend -- anyone at this location can, per
+      // Nathan's choice, so this keeps the shared record current.
+      const { error } = await supabaseClient.from("custom_blends")
+        .update({ name: customName.trim(), weight_per_gal: w, updated_at: new Date().toISOString() })
+        .eq("id", selectedCustomBlend.id);
+      if (error) { setCustomBlendSaveMsg(error.message); return; }
+      Analytics.track("calc_custom_blend_updated", { name: customName.trim(), location: activeLocation });
+    } else {
+      const { data, error } = await supabaseClient.from("custom_blends").insert({
+        location_id: activeLocation, name: customName.trim(), weight_per_gal: w, created_by: profile?.id || null,
+      }).select().single();
+      if (error) { setCustomBlendSaveMsg(error.message); return; }
+      Analytics.track("calc_custom_blend_saved", { name: customName.trim(), location: activeLocation });
+      // Switch straight to the newly-saved blend so it reads as "saved",
+      // not back to a blank custom-blend form.
+      setFertProduct("cb:" + data.id);
+    }
+    setCustomBlendSaveMsg("✓ Saved — visible to everyone at this location.");
+    loadCustomBlends();
+  }
+
+  async function deleteCustomBlend() {
+    if (!selectedCustomBlend) return;
+    if (!window.confirm('Delete "' + selectedCustomBlend.name + '" for everyone at this location?')) return;
+    const { error } = await supabaseClient.from("custom_blends").delete().eq("id", selectedCustomBlend.id);
+    if (error) { setCustomBlendSaveMsg(error.message); return; }
+    Analytics.track("calc_custom_blend_deleted", { name: selectedCustomBlend.name, location: activeLocation });
+    setFertProduct("custom");
+    loadCustomBlends();
+  }
 
   // Calculations
   const cost = parseFloat(costPerTon) || 0;
@@ -2977,7 +3322,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
       )}
 
       {calcView === "cp" ? (
-        <CPPairingCalculator activeLocation={activeLocation} locations={locations} txData={txData} isAdmin={isAdmin} district={effectiveDistrict} overridesMap={overridesMap} hideCost={hideCost} />
+        <CPPairingCalculator activeLocation={activeLocation} locations={locations} txData={txData} isAdmin={isAdmin} district={effectiveDistrict} overridesMap={overridesMap} hideCost={hideCost} profile={profile} />
       ) : (<React.Fragment>
 
       {/* COMMODITY */}
@@ -2997,6 +3342,11 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
                   {tillItOptions.map(r => <option key={r.blend_id} value={r.blend_id}>{r.blend_name}{r.is_stale ? " (stale cost data)" : ""}</option>)}
                 </optgroup>
               )}
+              {customBlends.length > 0 && (
+                <optgroup label={"Custom Blends — " + (locations.find(l => l.id === activeLocation)?.name || "this location")}>
+                  {customBlends.map(b => <option key={b.id} value={"cb:" + b.id}>{b.name}</option>)}
+                </optgroup>
+              )}
             </select>
             {!tillItBucket && (
               <div style={{ fontSize: 10, color: S.muted, marginTop: 6 }}>
@@ -3005,10 +3355,24 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
             )}
           </div>
 
-          {fertProduct === "custom" && (
+          {isCustomBlendType && (
             <div style={{ marginBottom: 12 }}>
               <label style={labelStyle}>Custom Blend Name</label>
               <input type="text" value={customName} onChange={e => setCustomName(e.target.value)} placeholder="e.g. 20-10-5" style={inputStyle} />
+              <div style={{ fontSize: 10, color: S.muted, marginTop: 6, lineHeight: 1.4 }}>
+                Name and Density save and share with everyone at this location — Cost and Price below are always typed fresh, never saved.
+              </div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" }}>
+                <button onClick={saveCustomBlend} style={{ fontSize: 11, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>
+                  {selectedCustomBlend ? "💾 Update Custom Blend" : "💾 Save as Custom Blend"}
+                </button>
+                {selectedCustomBlend && (selectedCustomBlend.created_by === profile?.id || isAdmin) && (
+                  <button onClick={deleteCustomBlend} style={{ fontSize: 11, fontWeight: 700, color: "#ef4444", background: "transparent", border: "1px solid rgba(239,68,68,.3)", borderRadius: 6, padding: "6px 12px", cursor: "pointer" }}>
+                    🗑 Delete
+                  </button>
+                )}
+                {customBlendSaveMsg && <span style={{ fontSize: 11, color: customBlendSaveMsg.startsWith("✓") ? S.green : (customBlendSaveMsg === "Saving…" ? S.muted : "#ef4444") }}>{customBlendSaveMsg}</span>}
+              </div>
             </div>
           )}
 
@@ -3377,11 +3741,56 @@ function fmtQty(n) { return new Intl.NumberFormat("en-US", { maximumFractionDigi
 // working point within it, never a sub-range, so every downstream
 // quantity/profit number is a single figure instead of a min-max spread.
 function CPRatePopover({ editing, onClose, onChange, onReset }) {
+  // Local text buffer, separate from the committed numeric `rate` (2026-10-30
+  // fix -- Nathan: "now i cant enter .5"). The input used to be driven
+  // directly by the parent's numeric `rate` prop; typing "." as the first
+  // character after select-all (the normal way to start a decimal like
+  // ".5") produced `Number(".")` = NaN, which the onChange guard correctly
+  // refused to propagate up -- but with nothing else holding the typed
+  // character, the next render just redrew the OLD numeric value over it,
+  // so the "." visually vanished before a digit could ever follow it. A
+  // local string buffer drives what's actually displayed, so a not-yet-a-
+  // number intermediate string survives on screen; the live preview
+  // (onChange(n, false), unchanged) still fires on every keystroke that
+  // DOES parse, same as before.
+  const [text, setText] = useState("");
+  const inputRef = useRef(null);
+  useEffect(() => {
+    if (!editing) return;
+    const val = String(editing.rate);
+    setText(val);
+    // Explicit focus+select, not the native `autoFocus` attribute --
+    // confirmed via a real interactive test (2026-10-30) that `autoFocus`
+    // doesn't reliably select the text on first mount. Two separate
+    // problems found there, both fixed here: (1) `autoFocus` itself races
+    // React's own event wiring on a just-inserted node. (2) Even calling
+    // `.select()` ourselves right after `setText(val)` doesn't work --
+    // `setText` only SCHEDULES a re-render, it doesn't update the DOM
+    // synchronously, so `.select()` was running against the input's OLD
+    // value (empty, on first open) and selecting nothing; the real re-
+    // render then landed afterward and reset the cursor to the end.
+    // Setting the DOM's own `.value` directly here, immediately before
+    // selecting, sidesteps that timing gap entirely -- React's own render
+    // sets the same value right after, a harmless no-op.
+    if (inputRef.current) {
+      inputRef.current.value = val;
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing?.key]);
   if (!editing) return null;
   const { label, rate, boundMin, boundMax, unit, rect } = editing;
   const isLocked = boundMin === boundMax;
   const left = Math.max(12, Math.min(rect.left, window.innerWidth - 242));
   const top = (rect.bottom + 150 > window.innerHeight) ? rect.top - 150 : rect.bottom + 8;
+  // Commit (clamp + persist) -- same math the old onBlur always did, now
+  // also reachable from Enter so hitting Enter both finalizes the value
+  // AND closes the popover, per Nathan's request.
+  function commit(andClose) {
+    const n = Number(text);
+    onChange(clampNum(Number.isNaN(n) ? boundMin : n, boundMin, boundMax), true);
+    if (andClose) onClose();
+  }
   return (
     <div style={{ position: "fixed", left, top: Math.max(12, top), zIndex: 200, width: 230, background: S.card, border: "1px solid " + S.border, borderRadius: 14, boxShadow: "0 22px 60px rgba(0,0,0,.35)", padding: "14px 16px 12px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 3 }}>
@@ -3391,11 +3800,34 @@ function CPRatePopover({ editing, onClose, onChange, onReset }) {
       <p style={{ margin: "0 0 10px", fontSize: 11, color: S.muted }}>
         {isLocked ? "Fixed rate: " + boundMin + " " + unit + " — not adjustable" : "Label range: " + boundMin + "–" + boundMax + " " + unit}
       </p>
+      {/* Real bug fixed 2026-10-30: Nathan reported clicking a rate's down
+          arrow made the number "continue to roll higher or lower" on its
+          own. Root cause -- this was `type="number" step="any"` with a
+          React-controlled value. Per spec, step="any" has no defined
+          increment, so the browser's native spin button has nothing solid
+          to step by; combined with React resetting the DOM's value on every
+          re-render, clicking the arrow could desync the browser's internal
+          step state from the controlled value and keep stepping on its
+          own -- a well-known class of bug for number inputs, not unique to
+          this app. Fixed by dropping `type="number"`/`step` entirely (same
+          fix applied to the 3 CP Pairing Calculator inputs below this
+          component) -- no native spinner at all, so the bug class can't
+          happen; nothing downstream relied on the input being type=number
+          anyway (every value here is already parsed with Number()/
+          parseFloat() wherever it's actually used). */}
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 10 }}>
-        <input type="number" step="any" inputMode="decimal" value={rate} disabled={isLocked}
+        <input ref={inputRef} type="text" inputMode="decimal" value={text} disabled={isLocked}
           onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
-          onChange={e => onChange(Number(e.target.value), false)}
-          onBlur={e => onChange(clampNum(Number(e.target.value), boundMin, boundMax), true)}
+          onChange={e => {
+            setText(e.target.value);
+            const n = Number(e.target.value);
+            if (!Number.isNaN(n)) onChange(n, false);
+          }}
+          onBlur={() => commit(false)}
+          onKeyDown={e => {
+            if (e.key === "Enter") { e.preventDefault(); commit(true); }
+            else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+          }}
           style={{ width: 0, flex: 1, border: "1px solid " + S.border, borderRadius: 8, padding: "7px 6px", font: "inherit", fontSize: 15, fontWeight: 700, textAlign: "center", outline: "none", background: S.inputBg, color: S.text }} />
         <span style={{ color: S.muted, fontSize: 12, whiteSpace: "nowrap" }}>{unit}</span>
       </div>
@@ -3407,11 +3839,23 @@ function CPRatePopover({ editing, onClose, onChange, onReset }) {
 }
 function clampNum(n, lo, hi) { return Math.min(Math.max(n, lo), hi); }
 
-function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, district, overridesMap, hideCost }) {
+function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, district, overridesMap, hideCost, profile }) {
   const [pairings, setPairings] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [showManage, setShowManage] = useState(false);
+  const [showAddCp, setShowAddCp] = useState(false);
+  const [showRequest, setShowRequest] = useState(false);
+  // Pending "Request a Product" count, admin-only -- small red badge on
+  // "Manage Pairings" so it's noticed without opening the modal, same
+  // pattern as the header's 🔔 Access Requests badge.
+  const [pendingRequestCount, setPendingRequestCount] = useState(0);
+  async function refreshPendingRequestCount() {
+    if (!isAdmin) return;
+    const { count } = await supabaseClient.from("cp_product_requests").select("id", { count: "exact", head: true }).eq("status", "pending");
+    setPendingRequestCount(count || 0);
+  }
+  useEffect(() => { refreshPendingRequestCount(); }, [isAdmin]);
 
   // Per-CP-product working state, keyed by cp_pairings.id.
   const [qty, setQty] = useState({});
@@ -3423,6 +3867,38 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
   // time, same "locked until changed" philosophy as the CP product side).
   const [partnerOverrides, setPartnerOverrides] = useState({});
   const [editing, setEditing] = useState(null); // CPRatePopover target
+  const [addingPartnerTo, setAddingPartnerTo] = useState(null); // AddBrandedPartnerModal target (a cp_pairings row)
+
+  // "Add CP Product" templates -- every distinct CP product already
+  // configured at ANY location (e.g. Rio Hondo's Glyphosate/Glufosinate/
+  // Warrant/Atrazine/Acephate/Transform), deduped by name, each carrying
+  // its already-chosen Branded partners, so a user at a different location
+  // can copy the whole pairing in one click instead of re-building it from
+  // scratch or waiting on an admin. Loaded once (not scoped to
+  // activeLocation -- the read RLS policy now allows seeing every
+  // location's pairings for exactly this purpose).
+  const [templates, setTemplates] = useState([]);
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  async function loadTemplates() {
+    const { data, error } = await supabaseClient
+      .from("cp_pairings")
+      .select("*, cp_pairing_branded(*)")
+      .order("created_at", { ascending: true });
+    if (!error && data) {
+      const byName = new Map();
+      data.forEach(row => {
+        const key = row.cp_product.trim().toLowerCase();
+        const existing = byName.get(key);
+        // Prefer whichever same-named row has the most Branded partners
+        // attached -- the more "complete" template to copy from.
+        if (!existing || (row.cp_pairing_branded || []).length > (existing.cp_pairing_branded || []).length) {
+          byName.set(key, row);
+        }
+      });
+      setTemplates([...byName.values()].sort((a, b) => a.cp_product.localeCompare(b.cp_product)));
+    }
+    setTemplatesLoaded(true);
+  }
 
   async function loadPairings() {
     if (!activeLocation) { setPairings([]); setLoading(false); return; }
@@ -3437,6 +3913,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
     setLoading(false);
   }
   useEffect(() => { loadPairings(); }, [activeLocation]);
+  useEffect(() => { loadTemplates(); }, []);
 
   function qtyFor(row) { return qty[row.id] !== undefined ? qty[row.id] : String(row.default_qty); }
   function rateFor(row) { return rate[row.id] !== undefined ? rate[row.id] : String(row.rate_min === row.rate_max ? row.rate_min : (row.rate_min + row.rate_max) / 2); }
@@ -3447,6 +3924,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
     setEditing({
       key, bpId: partner.bpId, label: partner.name, rate: curRate,
       boundMin: partner.rate_min, boundMax: partner.rate_max, unit: partner.rate_unit,
+      cpProduct: row.cp_product,
       rect: e.currentTarget.getBoundingClientRect(),
     });
   }
@@ -3460,9 +3938,12 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
     // anyway if it tried to write).
     if (commit && isAdmin && editing.bpId) {
       supabaseClient.from("cp_pairing_branded").update({ default_rate: newRate }).eq("id", editing.bpId).then(({ error }) => {
-        if (!error) setPairings(prev => prev.map(r => ({
-          ...r, cp_pairing_branded: (r.cp_pairing_branded || []).map(b => b.id === editing.bpId ? { ...b, default_rate: newRate } : b)
-        })));
+        if (!error) {
+          setPairings(prev => prev.map(r => ({
+            ...r, cp_pairing_branded: (r.cp_pairing_branded || []).map(b => b.id === editing.bpId ? { ...b, default_rate: newRate } : b)
+          })));
+          Analytics.track("cp_partner_rate_changed", { cp_product: editing.cpProduct, partner: editing.label, rate: newRate, unit: editing.unit, location: activeLocation });
+        }
       });
     }
   }
@@ -3479,6 +3960,42 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
     setEditing(null);
   }
 
+  // Self-added Branded partners are PRIVATE to whoever added them (2026-10-30,
+  // revised same day per Nathan: "should each acct hold their own additional
+  // products... and not that gets added to the location that others...
+  // cant remove?") -- a rep's own exploratory comparisons never show up for
+  // anyone else at that location, only what's admin-required (added_by ==
+  // null) is shared/visible to everyone. Admin sees everything here too
+  // (not just via Manage Pairings), for oversight. This is the single
+  // source of truth for "what does THIS viewer see paired with this CP
+  // product" -- both the tile list and the Add-partner modal's duplicate-
+  // exclusion list are built from it, so a rep is never blocked from
+  // adding something that looks new from their own point of view just
+  // because a different rep already added the same sku privately.
+  function visiblePartnersFor(row) {
+    return (row.cp_pairing_branded || []).filter(bp => isAdmin || bp.added_by == null || bp.added_by === profile?.id);
+  }
+
+  // Self-service remove (2026-10-30, per Nathan): a user can only remove a
+  // Branded partner THEY personally added -- never one an admin set up via
+  // Manage Pairings (admin-added rows have added_by = null, which the RLS
+  // self-service delete policy in cp_pairings_self_service.sql already
+  // guarantees can't match `added_by = auth.uid()` for anyone -- that's
+  // what actually enforces "admin-required pairings can't be removed at
+  // the location level", not anything client-side). The ✕ itself is only
+  // ever rendered when bp.added_by === profile.id (see the tile render
+  // below), so this never gets called for a row the current user doesn't
+  // own, but the RLS is the real backstop either way.
+  const [removeErr, setRemoveErr] = useState("");
+  async function removeOwnBrandedPartner(bp, cpProduct) {
+    if (!window.confirm("Remove this Branded product from your comparison?")) return;
+    setRemoveErr("");
+    const { error } = await supabaseClient.from("cp_pairing_branded").delete().eq("id", bp.id);
+    if (error) { setRemoveErr(error.message); return; }
+    Analytics.track("cp_self_remove_partner", { cp_product: cpProduct, partner_item: bp.sku_item, location: activeLocation });
+    loadPairings();
+  }
+
   if (!activeLocation) {
     return <div style={{ padding: "30px 10px", textAlign: "center", color: S.muted, fontSize: 13 }}>Pick a location above to see its CP Pairing Calculator.</div>;
   }
@@ -3489,20 +4006,37 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
         <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1 }}>
           {locName}'s CP Products {pairings.length > 0 ? "(" + pairings.length + ")" : ""}
         </div>
-        {isAdmin && (
-          <button onClick={() => setShowManage(true)} style={{ fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
-            ⚙️ Manage Pairings
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => setShowAddCp(true)} style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+            + Add CP Product
           </button>
-        )}
+          <button onClick={() => setShowRequest(true)} style={{ fontSize: 10, fontWeight: 700, color: S.amber, background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+            📩 Request a Product
+          </button>
+          {isAdmin && (
+            <button onClick={() => setShowManage(true)} style={{ position: "relative", fontSize: 10, fontWeight: 700, color: S.purple, background: "rgba(176,125,232,.1)", border: "1px solid rgba(176,125,232,.3)", padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
+              ⚙️ Manage Pairings
+              {pendingRequestCount > 0 && (
+                <span style={{ position: "absolute", top: -6, right: -6, fontSize: 9, fontWeight: 800, color: "#fff", background: "#ef4444", borderRadius: 10, padding: "1px 5px", lineHeight: 1.4 }}>
+                  {pendingRequestCount}
+                </span>
+              )}
+            </button>
+          )}
+        </div>
       </div>
+
+      {removeErr && (
+        <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 }}>{removeErr}</div>
+      )}
 
       {pairings.length === 0 && (
         <div style={{ padding: "40px 10px", textAlign: "center", color: S.muted, fontSize: 13 }}>
-          No CP products locked in for {locName} yet.{isAdmin ? " Click \"Manage Pairings\" to add some." : " Ask your manager to set these up."}
+          No CP products locked in for {locName} yet. Click "+ Add CP Product" above to copy one already set up elsewhere, or "Request a Product" if it's not on that list yet.
         </div>
       )}
 
@@ -3512,7 +4046,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
         const g = parseFloat(gpaFor(row)) || 0;
         const acres = cpAcresForProduct(q, row.qty_unit, r, row.rate_unit);
         const finished = acres * g;
-        const branded = (row.cp_pairing_branded || []).slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+        const branded = visiblePartnersFor(row).slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
         return (
           <div key={row.id} style={{ background: S.card, border: "1px solid " + S.border, borderRadius: 16, marginBottom: 14, overflow: "hidden", boxShadow: "0 6px 20px rgba(0,0,0,.16)" }}>
             <div style={{ padding: "13px 16px", fontSize: 15, fontWeight: 800, color: "#fff", background: "linear-gradient(135deg,#1e4a2c,#2d6b3f)", letterSpacing: .2 }}>
@@ -3526,7 +4060,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
                   <div>
                     <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Quantity</label>
                     <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
-                      <input type="number" min="0" step="any" inputMode="decimal" value={qtyFor(row)}
+                      <input type="text" inputMode="decimal" value={qtyFor(row)}
                         onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
                         onChange={e => setQty(prev => ({ ...prev, [row.id]: e.target.value }))}
                         style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
@@ -3536,7 +4070,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
                   <div>
                     <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Rate (UOM)</label>
                     <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
-                      <input type="number" min="0" step="any" inputMode="decimal" value={rateFor(row)}
+                      <input type="text" inputMode="decimal" value={rateFor(row)}
                         onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
                         onChange={e => setRate(prev => ({ ...prev, [row.id]: e.target.value }))}
                         style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
@@ -3547,7 +4081,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
                 <div style={{ marginBottom: 14 }}>
                   <label style={{ display: "block", fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: .5, color: S.muted, marginBottom: 4 }}>Spray Volume</label>
                   <div style={{ display: "flex", alignItems: "center", border: "1.5px solid " + S.border, borderRadius: 8, background: S.inputBg }}>
-                    <input type="number" min="0" step="any" inputMode="decimal" value={gpaFor(row)}
+                    <input type="text" inputMode="decimal" value={gpaFor(row)}
                       onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
                       onChange={e => setGpa(prev => ({ ...prev, [row.id]: e.target.value }))}
                       style={{ width: 0, flex: 1, border: "none", background: "transparent", padding: "9px 4px 9px 10px", color: S.text, font: "inherit", fontSize: 14, fontWeight: 700, outline: "none" }} />
@@ -3569,7 +4103,7 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
               <div style={{ padding: 16, display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, alignContent: "start" }}>
                 {branded.length === 0 && (
                   <div style={{ fontSize: 12, color: S.muted, gridColumn: "1/-1" }}>
-                    No Branded products paired with {row.cp_product} yet.{isAdmin ? " Add some via Manage Pairings." : ""}
+                    No Branded products paired with {row.cp_product} yet. Click "+ Add New Branded Product" below.
                   </div>
                 )}
                 {branded.map(bp => {
@@ -3601,9 +4135,22 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
                   const priced = (p && !p.dry_oz_price) ? resolvePrice(p, district, activeLocation, overridesMap) : null;
                   const sellPrice = priced ? (priced.target != null ? priced.target : priced.floor) : null;
                   const profit = (sellPrice != null && totalQty != null) ? (sellPrice - (p.cost || 0)) * totalQty : null;
+                  // Only the person who personally added this pairing can
+                  // remove it from here -- an admin-set-up pairing has
+                  // added_by = null and never matches, so it never shows an
+                  // ✕ in this view at all (it's "required" at this
+                  // location; Manage Pairings is still the only way to
+                  // remove one of those, admin-only).
+                  const canRemove = bp.added_by && profile?.id && bp.added_by === profile.id;
                   return (
-                    <div key={bp.id} style={{ background: S.inputBg, border: "1px solid " + S.border, borderRadius: 10, padding: "10px 12px" }}>
-                      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: S.text }}>
+                    <div key={bp.id} style={{ position: "relative", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 10, padding: "10px 12px" }}>
+                      {canRemove && (
+                        <span onClick={() => removeOwnBrandedPartner(bp, row.cp_product)} title="Remove this Branded product"
+                          style={{ position: "absolute", top: 6, right: 8, fontSize: 13, color: S.muted, cursor: "pointer", lineHeight: 1 }}>
+                          &times;
+                        </span>
+                      )}
+                      <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 6, color: S.text, paddingRight: canRemove ? 14 : 0 }}>
                         {name}{p?.pkg ? <span style={{ fontWeight: 600, color: S.muted }}> · {p.pkg}</span> : null}
                       </div>
                       {p && curRate != null ? (
@@ -3638,6 +4185,10 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
                     </div>
                   );
                 })}
+                <button onClick={() => setAddingPartnerTo(row)}
+                  style={{ background: "transparent", border: "1.5px dashed " + S.border, borderRadius: 10, padding: "10px 12px", cursor: "pointer", color: S.muted, fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 76 }}>
+                  + Add New Branded Product
+                </button>
               </div>
 
             </div>
@@ -3647,16 +4198,270 @@ function CPPairingCalculator({ activeLocation, locations, txData, isAdmin, distr
 
       <CPRatePopover editing={editing} onClose={() => setEditing(null)} onChange={changeEditor} onReset={resetEditor} />
 
+      {addingPartnerTo && (
+        <AddBrandedPartnerModal
+          cpPairing={addingPartnerTo} locName={locName} profile={profile} txData={txData}
+          existingSkuItems={visiblePartnersFor(addingPartnerTo).map(bp => String(bp.sku_item))}
+          onClose={() => setAddingPartnerTo(null)}
+          onSaved={() => { loadPairings(); setAddingPartnerTo(null); }} />
+      )}
+
+      {showAddCp && (
+        <AddCpProductModal
+          activeLocation={activeLocation} locName={locName} profile={profile} txData={txData}
+          templates={templatesLoaded ? templates : []} templatesLoaded={templatesLoaded}
+          existingNames={pairings.map(r => r.cp_product.trim().toLowerCase())}
+          onClose={() => setShowAddCp(false)}
+          onSaved={() => { loadPairings(); loadTemplates(); }} />
+      )}
+
+      {showRequest && (
+        <RequestCpProductModal
+          activeLocation={activeLocation} locName={locName} profile={profile}
+          onClose={() => setShowRequest(false)} />
+      )}
+
       {showManage && (
         <ManageCPPairings
-          activeLocation={activeLocation} locName={locName} txData={txData}
-          pairings={pairings} onClose={() => setShowManage(false)} onSaved={loadPairings} />
+          activeLocation={activeLocation} locName={locName} txData={txData} locations={locations}
+          pairings={pairings} onClose={() => { setShowManage(false); refreshPendingRequestCount(); }}
+          onSaved={() => { loadPairings(); loadTemplates(); }} />
       )}
     </div>
   );
 }
 
-function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, onSaved }) {
+// "Add New Branded Product" -- self-service: pair ANY Branded product onto
+// an already-set-up CP product at the viewer's own location, so they can
+// compare profit across options (2026-10-30, per Nathan). Same RLS as
+// AddCpProductModal's branded-row inserts (own-location-only via the
+// cp_pairings join, see cp_pairings_self_service.sql) -- no new SQL needed,
+// this reuses the self-service insert policy already in place.
+//
+// This creates a genuinely NEW CP+Branded combination (unlike "+ Add CP
+// Product" above, which only ever copies an already-existing, presumably
+// already-reviewed pairing) -- so per Nathan's explicit instruction, this
+// is the one place in the app that requires an active legal-label
+// acknowledgment before the Add action is even clickable, not just a
+// passive notice someone could skim past.
+function AddBrandedPartnerModal({ cpPairing, locName, profile, txData, existingSkuItems, onClose, onSaved }) {
+  const [search, setSearch] = useState("");
+  const [confirmed, setConfirmed] = useState(false);
+  const [busyItem, setBusyItem] = useState(null);
+  const [err, setErr] = useState("");
+
+  const results = search.trim().length >= 2
+    ? txData.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) && !existingSkuItems.includes(String(p.item))).slice(0, 8)
+    : [];
+
+  async function addPartner(p) {
+    if (!confirmed) return;
+    setErr(""); setBusyItem(p.item);
+    const { error } = await supabaseClient.from("cp_pairing_branded").insert({
+      cp_pairing_id: cpPairing.id, sku_item: p.item, sort_order: existingSkuItems.length, added_by: profile?.id || null,
+    });
+    setBusyItem(null);
+    if (error) { setErr(error.message); return; }
+    Analytics.track("cp_self_add_partner", { cp_product: cpPairing.cp_product, partner: p.name, location: cpPairing.location_id });
+    onSaved();
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "40px 14px" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(480px,100%)", background: S.card, border: "1px solid " + S.border, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <strong style={{ fontSize: 15 }}>Add Branded Product — {cpPairing.cp_product}</strong>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 20, color: S.muted, cursor: "pointer" }}>&times;</button>
+        </div>
+        <p style={{ fontSize: 11, color: S.muted, margin: "0 0 12px" }}>
+          For {locName}. Pick a Branded product to compare its profit on {cpPairing.cp_product} against your other options.
+        </p>
+
+        <div style={{ background: "rgba(232,162,48,.1)", border: "1px solid rgba(232,162,48,.3)", borderRadius: 10, padding: "10px 12px", marginBottom: 12 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: S.amber, marginBottom: 6 }}>⚠️ Read both labels first</div>
+          <div style={{ fontSize: 11.5, color: S.text, lineHeight: 1.4, marginBottom: 8 }}>
+            Pairing a Branded product with {cpPairing.cp_product} here doesn't check whether they're legally allowed to be applied together. Read {cpPairing.cp_product}'s label AND the Branded product's label before adding one — confirm the combination (tank mix) is legal and follows both labels' directions for use.
+          </div>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 11.5, color: S.text, cursor: "pointer" }}>
+            <input type="checkbox" checked={confirmed} onChange={e => setConfirmed(e.target.checked)} style={{ marginTop: 2, flexShrink: 0 }} />
+            I've read both labels and confirmed this combination is legal to apply together.
+          </label>
+        </div>
+
+        {err && <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+
+        <div style={{ position: "relative" }}>
+          <input type="search" placeholder={confirmed ? "Type to search Branded products..." : "Confirm you've read both labels first"} value={search}
+            disabled={!confirmed}
+            onChange={e => setSearch(e.target.value)}
+            style={{ width: "100%", background: confirmed ? S.inputBg : S.tag, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", opacity: confirmed ? 1 : .6 }} />
+          {results.length > 0 && (
+            <div style={{ position: "relative", marginTop: 6, background: S.card, border: "1px solid " + S.border, borderRadius: 8, maxHeight: 260, overflowY: "auto" }}>
+              {results.map(p => (
+                <div key={p.item} onClick={() => addPartner(p)}
+                  style={{ padding: "9px 10px", cursor: busyItem ? "default" : "pointer", borderBottom: "1px solid " + S.border, opacity: busyItem && busyItem !== p.item ? .5 : 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: S.text }}>{p.name}</div>
+                  <div style={{ fontSize: 10.5, color: S.muted, marginTop: 1 }}>
+                    {p.pkg ? p.pkg + " · " : ""}#{p.item}{p.rate_min != null ? " · " + p.rate_min + (p.rate_max !== p.rate_min ? "–" + p.rate_max : "") + " " + p.rate_unit : " · no rate data"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// "Add CP Product" -- self-service copy of an already-configured CP
+// product (+ its paired Branded skus) from any location onto the viewer's
+// own location. No admin needed: the CP product's rate_min/rate_max/
+// rate_unit and the Branded skus it pairs with are copied verbatim from
+// the template; only the AGRONOMIC pairing structure is copied, never a
+// price -- pricing still resolves per-viewer the normal way once it's on
+// their own location. See cp_pairings_self_service.sql for the RLS that
+// allows this (own-location-only insert, self-added-only delete).
+function AddCpProductModal({ activeLocation, locName, profile, txData, templates, templatesLoaded, existingNames, onClose, onSaved }) {
+  const [busyKey, setBusyKey] = useState(null);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState([]);
+
+  async function copyTemplate(tpl) {
+    setErr(""); setBusyKey(tpl.id);
+    const { data: newRow, error: insertErr } = await supabaseClient.from("cp_pairings").insert({
+      location_id: activeLocation, cp_product: tpl.cp_product, qty_unit: tpl.qty_unit, rate_unit: tpl.rate_unit,
+      rate_min: tpl.rate_min, rate_max: tpl.rate_max, default_qty: tpl.default_qty, default_gpa: tpl.default_gpa,
+      label_rate: tpl.label_rate, sort_order: existingNames.length + done.length, added_by: profile?.id || null,
+    }).select().single();
+    if (insertErr) { setErr(insertErr.message); setBusyKey(null); return; }
+
+    const branded = (tpl.cp_pairing_branded || []).slice().sort((a, b) => (a.sort_order || 0) - (b.sort_order || 0));
+    if (branded.length > 0) {
+      const { error: brandedErr } = await supabaseClient.from("cp_pairing_branded").insert(
+        branded.map((bp, i) => ({
+          cp_pairing_id: newRow.id, sku_item: bp.sku_item, default_rate: bp.default_rate,
+          sort_order: i, added_by: profile?.id || null,
+        }))
+      );
+      if (brandedErr) { setErr(brandedErr.message); setBusyKey(null); return; }
+    }
+    Analytics.track("cp_self_add_product", { product: tpl.cp_product, location: activeLocation, partner_count: branded.length });
+    setDone(prev => [...prev, tpl.cp_product]);
+    setBusyKey(null);
+    onSaved();
+  }
+
+  const available = templates.filter(t => !existingNames.includes(t.cp_product.trim().toLowerCase()));
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "40px 14px" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(560px,100%)", background: S.card, border: "1px solid " + S.border, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <strong style={{ fontSize: 15 }}>Add CP Product — {locName}</strong>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 20, color: S.muted, cursor: "pointer" }}>&times;</button>
+        </div>
+        <p style={{ fontSize: 11, color: S.muted, margin: "0 0 14px" }}>
+          Copies the rate and the already-chosen Branded partners straight from whichever location set it up — your own location's prices still apply once it's here. Don't see what you need? Try "Request a Product" instead.
+        </p>
+        {err && <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 }}>{err}</div>}
+
+        {!templatesLoaded && <div style={{ textAlign: "center", color: S.muted, fontSize: 13, padding: 20 }}>Loading…</div>}
+
+        {templatesLoaded && available.length === 0 && (
+          <div style={{ textAlign: "center", color: S.muted, fontSize: 13, padding: 20 }}>
+            {templates.length === 0 ? "No CP products set up anywhere yet." : "Every available CP product is already set up at " + locName + "."}
+          </div>
+        )}
+
+        {available.map(tpl => {
+          const branded = (tpl.cp_pairing_branded || []);
+          const names = branded.map(bp => txData.find(x => String(x.item) === String(bp.sku_item))?.name).filter(Boolean);
+          const justAdded = done.includes(tpl.cp_product);
+          return (
+            <div key={tpl.id} style={{ border: "1px solid " + S.border, borderRadius: 10, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700 }}>{tpl.cp_product}</div>
+                <div style={{ fontSize: 11, color: S.muted, marginTop: 2 }}>
+                  {tpl.rate_min === tpl.rate_max ? tpl.rate_min : tpl.rate_min + "–" + tpl.rate_max} {tpl.rate_unit}
+                  {names.length > 0 ? " · pairs with " + names.join(", ") : " · no Branded partners yet"}
+                </div>
+              </div>
+              <button onClick={() => copyTemplate(tpl)} disabled={busyKey === tpl.id || justAdded}
+                style={{ flexShrink: 0, fontSize: 11, fontWeight: 700, color: S.onAccent, background: justAdded ? S.muted : S.green, border: "none", borderRadius: 8, padding: "7px 12px", cursor: justAdded ? "default" : "pointer", opacity: busyKey === tpl.id ? .6 : 1 }}>
+                {justAdded ? "✓ Added" : busyKey === tpl.id ? "Adding…" : "+ Add"}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// "Request a Product" -- a user types the name of a Crop Protection
+// product they'd like Nathan to add/pair, lands in cp_product_requests for
+// admin triage from Manage Pairings.
+function RequestCpProductModal({ activeLocation, locName, profile, onClose }) {
+  const [name, setName] = useState("");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+  const [sent, setSent] = useState(false);
+
+  async function submit() {
+    if (!name.trim()) { setErr("Enter the product name."); return; }
+    setErr(""); setSaving(true);
+    const { error } = await supabaseClient.from("cp_product_requests").insert({
+      location_id: activeLocation, requested_by: profile?.id || null,
+      requester_name: profile?.display_name || profile?.name || "", product_name: name.trim(),
+      note: note.trim() || null,
+    });
+    setSaving(false);
+    if (error) { setErr(error.message); return; }
+    Analytics.track("cp_product_requested", { product: name.trim(), location: activeLocation });
+    setSent(true);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 300, background: "rgba(0,0,0,.5)", display: "flex", alignItems: "flex-start", justifyContent: "center", overflowY: "auto", padding: "40px 14px" }} onClick={onClose}>
+      <div onClick={e => e.stopPropagation()} style={{ width: "min(460px,100%)", background: S.card, border: "1px solid " + S.border, borderRadius: 14, padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+          <strong style={{ fontSize: 15 }}>Request a Product — {locName}</strong>
+          <button onClick={onClose} style={{ border: "none", background: "transparent", fontSize: 20, color: S.muted, cursor: "pointer" }}>&times;</button>
+        </div>
+        {sent ? (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div style={{ fontSize: 28, marginBottom: 8 }}>✅</div>
+            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}>Sent to Nathan</div>
+            <div style={{ fontSize: 11, color: S.muted }}>He'll set up "{name.trim()}" and its Branded pairing when he gets to it.</div>
+          </div>
+        ) : (
+          <React.Fragment>
+            <p style={{ fontSize: 11, color: S.muted, margin: "0 0 14px" }}>
+              Not on the "Add CP Product" list yet? Tell Nathan which Crop Protection product you'd like added and paired up.
+            </p>
+            {err && <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, marginBottom: 10 }}>{err}</div>}
+            <input placeholder="Crop Protection product name" value={name} onChange={e => setName(e.target.value)}
+              onFocus={e => e.target.select()} onMouseUp={e => e.preventDefault()}
+              style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", marginBottom: 8 }} />
+            <textarea placeholder="Anything else to add? (optional — Branded partner you'd want paired with it, label rate, etc.)" value={note} onChange={e => setNote(e.target.value)}
+              rows={3}
+              style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 13, padding: "8px 10px", outline: "none", boxSizing: "border-box", marginBottom: 12, resize: "vertical", font: "inherit" }} />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={submit} disabled={saving} style={{ fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.amber, border: "none", borderRadius: 8, padding: "8px 14px", cursor: "pointer", opacity: saving ? .6 : 1 }}>
+                {saving ? "Sending…" : "📩 Send Request"}
+              </button>
+              <button onClick={onClose} style={{ fontSize: 12, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 8, padding: "8px 14px", cursor: "pointer" }}>Cancel</button>
+            </div>
+          </React.Fragment>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ManageCPPairings({ activeLocation, locName, txData, locations, pairings, onClose, onSaved }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newQtyUnit, setNewQtyUnit] = useState("gal");
@@ -3669,6 +4474,33 @@ function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, 
   const [saveErr, setSaveErr] = useState("");
   const [partnerSearch, setPartnerSearch] = useState({}); // cp_pairing_id -> search text
 
+  // "Request a Product" triage -- every PENDING request across every
+  // location, not just activeLocation, so nothing gets missed just because
+  // the admin happens to have a different location picked above.
+  const [requests, setRequests] = useState([]);
+  const [requestsLoading, setRequestsLoading] = useState(true);
+  async function loadRequests() {
+    setRequestsLoading(true);
+    const { data } = await supabaseClient.from("cp_product_requests").select("*").eq("status", "pending").order("created_at", { ascending: false });
+    setRequests(data || []);
+    setRequestsLoading(false);
+  }
+  useEffect(() => { loadRequests(); }, []);
+
+  async function decideRequest(id, status) {
+    setSaveErr("");
+    const req = requests.find(r => r.id === id);
+    const { error } = await supabaseClient.from("cp_product_requests").update({ status, decided_at: new Date().toISOString() }).eq("id", id);
+    if (error) { setSaveErr(error.message); return; }
+    Analytics.track("cp_request_decided", { product: req?.product_name, decision: status, requested_location: req?.location_id });
+    loadRequests();
+  }
+
+  function addFromRequest(req) {
+    setNewName(req.product_name);
+    setAdding(true);
+  }
+
   async function addCpProduct() {
     setSaveErr("");
     const rMin = parseFloat(newRateMin), rMax = parseFloat(newRateMax || newRateMin);
@@ -3680,15 +4512,18 @@ function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, 
       label_rate: newLabelRate.trim() || null, sort_order: pairings.length,
     });
     if (error) { setSaveErr(error.message); return; }
+    Analytics.track("cp_admin_add_product", { product: newName.trim(), location: activeLocation });
     setNewName(""); setNewRateMin(""); setNewRateMax(""); setNewLabelRate(""); setAdding(false);
     onSaved();
   }
 
   async function removeCpProduct(id) {
+    const row = pairings.find(r => r.id === id);
     if (!window.confirm("Remove this CP product and its paired Branded products for " + locName + "?")) return;
     setSaveErr("");
     const { error } = await supabaseClient.from("cp_pairings").delete().eq("id", id);
     if (error) { setSaveErr(error.message); return; }
+    Analytics.track("cp_admin_remove_product", { product: row?.cp_product, location: activeLocation });
     onSaved();
   }
 
@@ -3699,17 +4534,25 @@ function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, 
   // identical to a successful no-op from the UI's point of view).
   async function addBrandedPartner(cpPairingId, p) {
     setSaveErr("");
-    const existing = pairings.find(r => r.id === cpPairingId)?.cp_pairing_branded || [];
+    const cpRow = pairings.find(r => r.id === cpPairingId);
+    const existing = cpRow?.cp_pairing_branded || [];
     const { error } = await supabaseClient.from("cp_pairing_branded").insert({ cp_pairing_id: cpPairingId, sku_item: p.item, sort_order: existing.length });
     if (error) { setSaveErr(error.message); return; }
+    Analytics.track("cp_admin_add_partner", { cp_product: cpRow?.cp_product, partner: p.name, location: activeLocation });
     setPartnerSearch(prev => ({ ...prev, [cpPairingId]: "" }));
     onSaved();
   }
 
   async function removeBrandedPartner(id) {
     setSaveErr("");
+    let cpProduct = null, partnerItem = null;
+    for (const row of pairings) {
+      const bp = (row.cp_pairing_branded || []).find(b => b.id === id);
+      if (bp) { cpProduct = row.cp_product; partnerItem = bp.sku_item; break; }
+    }
     const { error } = await supabaseClient.from("cp_pairing_branded").delete().eq("id", id);
     if (error) { setSaveErr(error.message); return; }
+    Analytics.track("cp_admin_remove_partner", { cp_product: cpProduct, partner_item: partnerItem, location: activeLocation });
     onSaved();
   }
 
@@ -3724,6 +4567,34 @@ function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, 
           This list is locked for the season — it won't change until you edit it here again, no matter what the sales data does.
         </p>
         {saveErr && <div style={{ color: "#ef4444", fontSize: 12, fontWeight: 600, background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.3)", borderRadius: 8, padding: "8px 10px", marginBottom: 12 }}>{saveErr}</div>}
+
+        {!requestsLoading && requests.length > 0 && (
+          <div style={{ border: "1px solid rgba(232,162,48,.35)", background: "rgba(232,162,48,.08)", borderRadius: 10, padding: 12, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: S.amber, marginBottom: 8 }}>📩 Product Requests ({requests.length})</div>
+            {requests.map(req => {
+              const reqLocName = locations.find(l => l.id === req.location_id)?.name || req.location_id;
+              return (
+                <div key={req.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8, padding: "7px 0", borderTop: "1px solid rgba(232,162,48,.25)" }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700 }}>{req.product_name}</div>
+                    <div style={{ fontSize: 10.5, color: S.muted, marginTop: 1 }}>
+                      {reqLocName}{req.requester_name ? " · " + req.requester_name : ""} · {new Date(req.created_at).toLocaleDateString()}
+                    </div>
+                    {req.note && <div style={{ fontSize: 11, color: S.muted, marginTop: 3, fontStyle: "italic" }}>"{req.note}"</div>}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                    <button onClick={() => addFromRequest(req)} title="Pre-fill the Add CP Product form below with this name"
+                      style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.green, border: "none", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>+ Add</button>
+                    <button onClick={() => decideRequest(req.id, "done")} title="Mark done"
+                      style={{ fontSize: 10, fontWeight: 700, color: S.green, background: "transparent", border: "1px solid rgba(76,175,106,.4)", borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>✓</button>
+                    <button onClick={() => decideRequest(req.id, "dismissed")} title="Dismiss"
+                      style={{ fontSize: 10, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 6, padding: "4px 8px", cursor: "pointer" }}>✕</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {pairings.map(row => {
           const search = partnerSearch[row.id] || "";
@@ -3751,6 +4622,9 @@ function ManageCPPairings({ activeLocation, locName, txData, pairings, onClose, 
                     </span>
                   );
                 })}
+              </div>
+              <div style={{ fontSize: 10, color: S.amber, marginBottom: 5 }}>
+                ⚠️ Read both labels before pairing — confirm the tank mix is legal and follows both labels' directions for use.
               </div>
               <div style={{ position: "relative" }}>
                 <input type="search" placeholder="+ Add Branded partner (type to search)..." value={search}
@@ -4586,6 +5460,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
         : `${head}(${full}) Floor: $${ov.newPrice.toFixed(2)} `;
     });
     const body = `Hey Frank,\n\nPlease update the following Floor and Wholesale prices for ${today}:\n\n${lines.join("\n")}\n\nThanks,\nNathan`;
+    Analytics.track("sheet_price_email_frank", { count: emailEdits.length });
     try { navigator.clipboard?.writeText(body); } catch (e) {}
     setEmailedToFrank(true); setTimeout(() => setEmailedToFrank(false), 2500);
     const mailto = "mailto:" + PRICING_EMAIL_TO + "?subject=" + encodeURIComponent("Pricing Updates") + "&body=" + encodeURIComponent(body);
@@ -4872,7 +5747,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                 master Floor/Target/Wholesale list -- use deliberately, since
                 the generated SQL updates skus/district_prices for everyone. */}
             {canEdit && allPriceEdits.length > 0 && (
-              <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
+              <button onClick={() => { Analytics.track("sheet_price_panel_opened", { count: allPriceEdits.length }); setGeneratedSql(""); setShowSavePrices(true); }}
                 style={{ fontSize: 10, fontWeight: 700, color: S.onAccent, background: S.amber, border: "1px solid " + S.amber, padding: "5px 10px", borderRadius: 6, cursor: "pointer" }}>
                 💰 Save Prices ({allPriceEdits.length})
               </button>
@@ -4886,7 +5761,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                 not red -- deliberately left as-is per Nathan's own call to
                 leave Sheet's styling alone. */}
             {canEdit && allPriceEdits.length > 0 && (
-              <button onClick={() => { setGeneratedSql(""); setShowSavePrices(true); }}
+              <button onClick={() => { Analytics.track("sheet_price_panel_opened", { count: allPriceEdits.length }); setGeneratedSql(""); setShowSavePrices(true); }}
                 style={{ position: "fixed", right: 16, bottom: 16, zIndex: 400, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg,#7a5a12,#c9900f)", color: "#fff", border: "none", borderRadius: 999, padding: "12px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 10px 28px rgba(201,144,15,.45)" }}>
                 💰 {allPriceEdits.length} Price Change{allPriceEdits.length === 1 ? "" : "s"} Pending
               </button>
@@ -5389,7 +6264,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
                   <div style={{ fontSize: 10, color: S.muted, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>SQL — review before running</div>
                   <textarea readOnly value={generatedSql} rows={Math.min(10, allPriceEdits.length + 1)}
                     style={{ width: "100%", background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.green, fontFamily: "monospace", fontSize: 11, padding: 10, boxSizing: "border-box", resize: "vertical" }} />
-                  <button onClick={() => { navigator.clipboard?.writeText(generatedSql); }}
+                  <button onClick={() => { Analytics.track("sheet_price_sql_copied", { count: allPriceEdits.length }); navigator.clipboard?.writeText(generatedSql); }}
                     style={{ marginTop: 6, fontSize: 11, color: S.blue, background: "rgba(91,155,213,.1)", border: "1px solid rgba(91,155,213,.3)", borderRadius: 6, padding: "5px 10px", cursor: "pointer" }}>📋 Copy SQL</button>
                 </div>
               )}
@@ -5404,7 +6279,7 @@ function ProfitSheet({ defaultDistrict, txData, natData, overridesMap, session, 
             )}
             <div style={{ padding: "14px 20px 20px", display: "flex", gap: 8 }}>
               <button onClick={() => setShowSavePrices(false)} style={{ fontSize: 12, color: S.muted, background: S.tag, border: "1px solid " + S.border, padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Close</button>
-              <button onClick={clearAllPriceOverrides} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
+              <button onClick={() => { Analytics.track("sheet_price_discard_all", { count: allPriceEdits.length }); clearAllPriceOverrides(); }} style={{ fontSize: 12, color: "#ef4444", background: "rgba(239,68,68,.1)", border: "1px solid rgba(239,68,68,.2)", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Discard All</button>
               <button onClick={generatePriceSql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: S.onAccent, background: S.amber, border: "none", padding: "10px 14px", borderRadius: 8, cursor: "pointer" }}>Generate SQL</button>
             </div>
           </div>
@@ -5686,6 +6561,8 @@ function App() {
   const [initialLoading, setInitialLoading] = useState(true);
   const [connError, setConnError] = useState(null);
   const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [whatsNewReleases, setWhatsNewReleases] = useState([]);
+  const [whatsNewCatchup, setWhatsNewCatchup] = useState(false);
 
   const [txData, setTxData] = useState([]);
   const [natData, setNatData] = useState([]);
@@ -5813,6 +6690,24 @@ function App() {
     return () => { if (subscription) subscription.unsubscribe(); };
   }, []);
 
+  // Real bug fixed 2026-10-30: Nathan reported "glitching back to TX
+  // Products" while sitting on another tab (Till-It Blends specifically).
+  // Root cause -- this effect used to depend on the whole `session` object
+  // (`[session]`). Supabase's client auto-refreshes the access token in the
+  // background (and especially right when the browser tab regains focus
+  // after a while away) -- `onAuthStateChange` fires on every refresh with
+  // a brand-new session OBJECT for the SAME logged-in user, so `[session]`
+  // looked "changed" by reference even though nothing about who's logged in
+  // actually changed. That re-ran this entire effect: re-fetched the whole
+  // catalog from scratch AND hit the `setView(...)` line at the bottom
+  // unconditionally, which always resets to "tx"/"district" -- yanking
+  // whoever was on Till-It Blends (or any other tab) straight back to
+  // Products with no warning. It also silently double-logged spurious
+  // "login" analytics events on every token refresh. Fixed by keying this
+  // effect on `session?.user?.id` instead of the whole object -- that
+  // string is stable across a token refresh (same user), so this only
+  // re-runs on an ACTUAL sign-in/sign-out transition (id goes from
+  // undefined to a real id, or vice versa), never on a background refresh.
   useEffect(() => {
     if (!session) return;
     async function loadAll() {
@@ -5827,6 +6722,24 @@ function App() {
         setProfile(prof);
         Analytics.setUser(prof, session.user.email);
         Analytics.track("login", { role: prof.role, district: prof.district });
+
+        // "What's New" splash (2026-10-30, revised same day per Nathan: "users
+        // who have not logged in since this feature existed can get the
+        // update of everything new... hey its been a while, here is whats
+        // new") -- a null last_seen_release (anyone who hasn't logged in
+        // since this shipped) now shows EVERY release, not a silent catch-up,
+        // with a tailored "it's been a while" subtitle (see `catchup` prop).
+        // A known last_seen_release still only shows what's genuinely new
+        // since that specific login.
+        if (RELEASES.length > 0) {
+          if (prof.last_seen_release == null) {
+            setWhatsNewCatchup(true);
+            setWhatsNewReleases(RELEASES);
+          } else {
+            const unseen = RELEASES.filter(r => r.id > prof.last_seen_release);
+            if (unseen.length > 0) { setWhatsNewCatchup(false); setWhatsNewReleases(unseen); }
+          }
+        }
 
         const { data: tx } = await supabaseClient.from("v_tx_pricing").select("*").order("name");
         const { data: catOverrides } = await supabaseClient.from("product_category_overrides").select("*");
@@ -5893,7 +6806,7 @@ function App() {
       setInitialLoading(false);
     }
     loadAll();
-  }, [session]);
+  }, [session?.user?.id]);
 
   const handleLogin = useCallback(async (email, password) => {
     setLoginLoading(true);
@@ -5912,6 +6825,12 @@ function App() {
     setSession(null); setProfile(null);
     setSearch(""); setCatFilter("ALL"); setView("tx");
   }, []);
+
+  function dismissWhatsNew() {
+    setWhatsNewReleases([]);
+    const latest = RELEASES[RELEASES.length - 1]?.id;
+    if (latest) supabaseClient.rpc("set_last_seen_release", { p_release: latest }).then(() => {});
+  }
 
   const refreshAccessRequests = useCallback(async () => {
     const { data: reqs } = await supabaseClient.from("access_requests").select("*").order("requested_at", { ascending: false });
@@ -6138,6 +7057,7 @@ function App() {
 
   return (
     <div style={{ minHeight: "100vh", background: S.bg, color: S.text, fontFamily: "-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" }}>
+      <WhatsNewSplash releases={whatsNewReleases} catchup={whatsNewCatchup} onDismiss={dismissWhatsNew} />
       <header style={{ background: S.headerBg, borderBottom: "2px solid " + S.greenDim, padding: "12px 14px 8px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <div>
@@ -6251,7 +7171,7 @@ function App() {
           pushed or reverted, same "don't lose it on navigation" fix already
           applied to the Sheet. Admin-only, matching who can edit a cell. */}
       {isAdmin && Object.keys(pricingOverrides).length > 0 && (
-        <button onClick={() => setShowPricingSqlPanel(true)}
+        <button onClick={() => { Analytics.track("price_changes_panel_opened", { count: Object.keys(pricingOverrides).length }); setShowPricingSqlPanel(true); }}
           style={{ position: "fixed", right: 16, bottom: 16, zIndex: 400, display: "flex", alignItems: "center", gap: 8, background: "linear-gradient(135deg,#8a1f1f,#c23b3b)", color: "#fff", border: "none", borderRadius: 999, padding: "12px 18px", fontSize: 13, fontWeight: 700, cursor: "pointer", boxShadow: "0 10px 28px rgba(194,59,59,.45)" }}>
           💰 {Object.keys(pricingOverrides).length} Price Change{Object.keys(pricingOverrides).length === 1 ? "" : "s"} Pending
         </button>
@@ -6290,6 +7210,7 @@ function PricingSqlPanel({ overrides, sql, onGenerate, onClearOne, onClearAll, o
     .sort((a, b) => (a[1].item - b[1].item) || (a[1].tier === b[1].tier ? 0 : a[1].tier === "floor" ? -1 : 1));
   async function copySql() {
     const text = sql || onGenerate();
+    Analytics.track("price_sql_copied", { count: rows.length });
     try { await navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 2000); } catch (e) {}
   }
   // Opens a ready-to-send email in whatever the OS's default mail client is
@@ -6313,6 +7234,7 @@ function PricingSqlPanel({ overrides, sql, onGenerate, onClearOne, onClearAll, o
         : `${head}(${full}) Floor: $${ov.newPrice.toFixed(2)} `;
     });
     const body = `Hey Frank,\n\nPlease update the following Floor and Wholesale prices for ${today}:\n\n${lines.join("\n")}\n\nThanks,\nNathan`;
+    Analytics.track("price_email_frank", { count: emailRows.length });
     try { await navigator.clipboard.writeText(body); setEmailed(true); setTimeout(() => setEmailed(false), 2500); } catch (e) {}
     const mailto = "mailto:" + PRICING_EMAIL_TO + "?subject=" + encodeURIComponent("Pricing Updates") + "&body=" + encodeURIComponent(body);
     window.location.href = mailto;
@@ -6352,7 +7274,7 @@ function PricingSqlPanel({ overrides, sql, onGenerate, onClearOne, onClearAll, o
           <button onClick={copySql} style={{ flex: 1, fontSize: 12, fontWeight: 700, color: "#fff", background: "linear-gradient(135deg,#8a1f1f,#c23b3b)", border: "none", borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>
             {copied ? "✓ Copied" : "📋 Copy SQL"}
           </button>
-          <button onClick={onClearAll} style={{ fontSize: 12, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>Discard All</button>
+          <button onClick={() => { Analytics.track("price_changes_discarded_all", { count: rows.length }); onClearAll(); }} style={{ fontSize: 12, fontWeight: 700, color: S.muted, background: "transparent", border: "1px solid " + S.border, borderRadius: 8, padding: "9px 14px", cursor: "pointer" }}>Discard All</button>
         </div>
         {sql && (
           <textarea readOnly value={sql} style={{ width: "100%", height: 140, marginTop: 4, background: S.inputBg, border: "1px solid " + S.border, borderRadius: 8, color: S.text, fontSize: 11, fontFamily: "monospace", padding: 10, boxSizing: "border-box", resize: "vertical" }} />
