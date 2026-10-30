@@ -2518,9 +2518,6 @@ function AnalyticsDashboard() {
 // 11-37-0 switched from 12.00 (a Simplot spec sheet) to FertHub's own 11.74
 // so the two tools agree. 28% UAN has no FertHub equivalent (not tracked
 // there at all) -- stays fully manual entry.
-// Order per Nathan's request 2026-10-29: 32% UAN, 28% UAN, 11-37-0, 10-34-0,
-// 4-11-11, 12-0-0-26S (ATS) -- Object.entries() below preserves this
-// insertion order in the dropdown, not alphabetical.
 const COMMODITIES = {
   uan32:  { name: "32% UAN",        weight: 11.06 },
   uan28:  { name: "28% UAN",        weight: 10.60 },
@@ -2530,6 +2527,15 @@ const COMMODITIES = {
   ats:    { name: "12-0-0-26S (ATS)", weight: 10.80 },
   custom: { name: "Custom Blend",   weight: 0 }
 };
+
+// Dropdown order per Nathan's request 2026-10-29: 32% UAN, 28% UAN, 11-37-0,
+// 10-34-0, 4-11-11, 12-0-0-26S (ATS). Deliberately a SEPARATE array, not just
+// Object.keys(COMMODITIES) in source order -- JS objects always enumerate
+// integer-like string keys ("1137", "1034", "411") first, in ascending
+// NUMERIC order, before any other string keys, no matter what order they're
+// written in the object literal. That's why reordering COMMODITIES itself
+// silently had zero effect on the dropdown the first time.
+const COMMODITY_ORDER = ["uan32", "uan28", "1137", "1034", "411", "ats", "custom"];
 
 // Rate ranges verified 2026-08-31 directly against each product's real label
 // (guaranteed analysis + directions for use, not a sell sheet) -- see
@@ -2984,7 +2990,7 @@ function BlendCalculator({ profile, district, location, txData, overridesMap, hi
               style={{ ...inputStyle, WebkitAppearance: "none", paddingRight: 32, backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='%236b8a6e'%3E%3Cpath d='M6 8L1 3h10z'/%3E%3C/svg%3E\")", backgroundRepeat: "no-repeat", backgroundPosition: "right 12px center" }}>
               <option value="">— Select Product —</option>
               <optgroup label="Commodities">
-                {Object.entries(COMMODITIES).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}
+                {COMMODITY_ORDER.map(k => <option key={k} value={k}>{COMMODITIES[k].name}</option>)}
               </optgroup>
               {tillItOptions.length > 0 && (
                 <optgroup label={"Till-It Blends — " + TILL_IT_BUCKET_LABELS[tillItBucket] + " pricing"}>
