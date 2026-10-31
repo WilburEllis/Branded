@@ -128,11 +128,15 @@ const Analytics = (() => {
 // per release, stacked) -- Nathan's call: "whichever is easier... one
 // screen with all updates since last login is awesome if its easy to do."
 const RELEASES = [
-  // Example shape for the next real entry:
-  // { id: "2026-11-02", date: "November 2, 2026", items: [
-  //     "Add your own CP products in the Calc tab's CP Pairing Calculator...",
-  //     "Commodity dropdown reordered...",
-  // ] },
+  { id: "2026-10-30", date: "October 30, 2026", items: [
+      "Save your own Custom Blends in the Blend Calculator — Name and Density save and share with everyone at your location; Cost and Price don't save.",
+      "Add your own CP products in the Calc tab's CP Pairing Calculator — pick from CP products already set up elsewhere and it copies straight onto your own location, already paired with the right Branded products.",
+      "New \"📩 Request a Product\" button, same screen — if the CP product you need isn't on that list yet, type its name and it goes straight to Nathan to add.",
+      "11-37-0's weight corrected — truck load tonnage/profit numbers for straight 11-37-0 are now a touch more accurate.",
+      "New \"+ Add New Branded Product\" button on every CP product card — pick any Branded product to pair with that CP product and see its profit compared side-by-side with your other options. You'll need to confirm you've read both labels first.",
+      "Remove a Branded product you added, right from its ✕.",
+      "Squashed a few bugs.",
+  ] },
 ];
 
 function WhatsNewSplash({ releases, catchup, onDismiss }) {
